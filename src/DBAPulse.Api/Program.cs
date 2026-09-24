@@ -1,3 +1,4 @@
+using DBAPulse.Domain;
 using DBAPulse.Data;
 using DBAPulse.Api;
 
@@ -12,6 +13,7 @@ builder.Services.AddSingleton(new OperationsStore(apiConnection));
 builder.Services.AddSingleton(new ProtectionStore(apiConnection));
 builder.Services.AddSingleton(new CapacityStore(apiConnection));
 builder.Services.AddSingleton(new BaselineStore(apiConnection));
+builder.Services.AddSingleton(new ManagementReadStore(apiConnection));
 builder.Services.AddProblemDetails();
 builder.Services.AddCors(options => options.AddPolicy("Development", policy => policy.WithOrigins("http://localhost:5173").AllowAnyHeader().AllowAnyMethod()));
 
@@ -58,6 +60,12 @@ app.MapGet("/api/capacity/databases/{id:int}", async (int id, CapacityStore stor
 app.MapGet("/api/capacity/databases/{id:int}/history", async (int id, int? days, CapacityStore store, CancellationToken token) => Results.Ok(await store.HistoryAsync(id,days??30,token)));
 app.MapGet("/api/capacity/volumes", async (string? status, int? serverId, string? forecastStatus, int? page, int? pageSize, CapacityStore store, CancellationToken token) => Results.Ok(await store.VolumesAsync(status,serverId,forecastStatus,Math.Max(1,page??1),Math.Clamp(pageSize??50,1,100),token)));
 app.MapGet("/api/capacity/volumes/{id}", async (string id, CapacityStore store, CancellationToken token) => Results.Ok(await store.VolumesAsync(null,null,null,1,1,token,id)));
+app.MapGet("/api/management/overview", async (ManagementReadStore store, CancellationToken token) => Results.Ok(await store.OverviewAsync(token)));
+app.MapGet("/api/management/attention", async (string? severity, int? serverId, int? databaseId, string? domain, int? page, int? pageSize, ManagementReadStore store, CancellationToken token) => Results.Ok(await store.AttentionAsync(severity,serverId,databaseId,domain,Math.Max(1,page??1),Math.Clamp(pageSize??50,1,100),token)));
+app.MapGet("/api/management/health", async (int? serverId, int? databaseId, ManagementReadStore store, CancellationToken token) => Results.Ok(await store.HealthAsync(serverId,databaseId,token)));
+app.MapGet("/api/management/changes", (DateTimeOffset? fromUtc, DateTimeOffset? toUtc) => Results.Ok(new PagedResult<ManagementChangeRow>(Array.Empty<ManagementChangeRow>(),1,50,0)));
+app.MapGet("/api/management/correlations", () => Results.Ok(Array.Empty<CorrelationGroupRow>()));
+app.MapGet("/api/management/correlations/{id:long}", (long id) => Results.NotFound());
 app.MapGet("/api/anomalies/overview", async (BaselineStore store, CancellationToken token) => Results.Ok(await store.OverviewAsync(token)));
 app.MapGet("/api/anomalies", async (string? metricType, string? severity, string? status, int? serverId, int? databaseId, DateTimeOffset? fromUtc, DateTimeOffset? toUtc, int? page, int? pageSize, BaselineStore store, CancellationToken token) => Results.Ok(await store.AnomaliesAsync(metricType, severity, status, serverId, databaseId, fromUtc, toUtc, Math.Max(1, page ?? 1), Math.Clamp(pageSize ?? 50, 1, 100), token)));
 app.MapGet("/api/anomalies/{id:long}", async (long id, BaselineStore store, CancellationToken token) => { var value = await store.AnomalyDetailAsync(id, token); return value is null ? Results.NotFound() : Results.Ok(value); });

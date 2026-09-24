@@ -54,6 +54,7 @@ public sealed class AuditMiddleware
         if (path.Equals("/api/health", StringComparison.OrdinalIgnoreCase)) return false;
         var parts = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
         if (parts.Length < 2 || !parts[0].Equals("api", StringComparison.OrdinalIgnoreCase)) return false;
+        if (parts[1].Equals("management", StringComparison.OrdinalIgnoreCase)) { resourceType="Management"; action=parts.Length>=3 ? parts[2].Equals("attention",StringComparison.OrdinalIgnoreCase) ? "Management.Attention.View" : parts[2].Equals("health",StringComparison.OrdinalIgnoreCase) ? "Management.Health.View" : parts[2].Equals("changes",StringComparison.OrdinalIgnoreCase) ? "Management.Changes.View" : parts[2].Equals("correlations",StringComparison.OrdinalIgnoreCase) ? (parts.Length>=4 ? "Management.Correlation.Detail" : "Management.Correlation.List") : "Management.View" : "Management.View"; return true; }
         if (parts[1].Equals("dashboard", StringComparison.OrdinalIgnoreCase) && parts.Length >= 3) { action = "Dashboard.View"; resourceType = "Dashboard"; return true; }
         if (parts[1].Equals("performance", StringComparison.OrdinalIgnoreCase) && parts.Length >= 3)
         {

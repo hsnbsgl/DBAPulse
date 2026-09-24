@@ -1,14 +1,14 @@
 export const chartColors = {
-  actual: '#63a4ff',
-  forecast: '#a78bfa',
-  success: '#4dcc8a',
-  warning: '#e9aa4c',
-  critical: '#ed6a75',
-  info: '#63a4ff',
-  muted: '#7186a4',
-  grid: '#20324b',
-  text: '#8fa2bd',
-  panel: '#101b2d',
+  actual: '#f08a24',
+  forecast: '#6ea7d8',
+  success: '#46c878',
+  warning: '#e0a53a',
+  critical: '#ed6262',
+  info: '#6ea7d8',
+  muted: '#858585',
+  grid: '#3a3a3a',
+  text: '#a9a9a9',
+  panel: '#202020',
 };
 
 export const chartFont = 'Inter, Roboto, Arial, sans-serif';

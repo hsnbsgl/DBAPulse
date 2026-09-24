@@ -11,15 +11,15 @@ import FactCheckIcon from '@mui/icons-material/FactCheck';
 
 type NavItem = { key: string; label: string; icon: ReactNode; target?: string };
 const nav: NavItem[] = [
-  { key: 'dashboard', label: 'Dashboard', icon: <DashboardIcon /> },
-  { key: 'estate', label: 'SQL Estate', icon: <StorageIcon /> },
-  { key: 'protection', label: 'Protection & Availability', icon: <ShieldIcon /> },
+  { key: 'dashboard', label: 'Fleet Overview', icon: <DashboardIcon /> },
+  { key: 'estate', label: 'Servers & Databases', icon: <StorageIcon /> },
+  { key: 'protection', label: 'Protection', icon: <ShieldIcon /> },
   { key: 'performance', label: 'Performance', icon: <SpeedIcon /> },
-  { key: 'operations', label: 'Operations', icon: <CrisisAlertIcon /> },
-  { key: 'insights', label: 'Insights', icon: <CrisisAlertIcon /> },
-  { key: 'capacity', label: 'Capacity', icon: <StorageIcon /> },
-  { key: 'collections', label: 'Collections', icon: <TimelineIcon />, target: 'dashboard' },
-  { key: 'audit', label: 'Audit', icon: <FactCheckIcon /> },
+  { key: 'operations', label: 'Blocking & Deadlocks', icon: <CrisisAlertIcon /> },
+  { key: 'insights', label: 'Anomalies', icon: <CrisisAlertIcon /> },
+  { key: 'capacity', label: 'FinOps & Capacity', icon: <StorageIcon /> },
+  { key: 'collections', label: 'Collection Runs', icon: <TimelineIcon />, target: 'dashboard' },
+  { key: 'audit', label: 'Audit Trail', icon: <FactCheckIcon /> },
 ];
 
 export default function AppShell({ activeView, onNavigate, children }: { activeView: string; onNavigate: (view: string) => void; children: ReactNode }) {
@@ -27,7 +27,7 @@ export default function AppShell({ activeView, onNavigate, children }: { activeV
   return <Box className="app-shell">
     <AppBar position="fixed" className="topbar"><Toolbar>
       <Typography className="topbar-title">DBA PULSE</Typography>
-      <Typography className="topbar-subtitle">Database Operations Intelligence Platform</Typography>
+      <Typography className="topbar-subtitle">SQL Server Performance Monitor</Typography>
       <Box sx={{ flex: 1 }} />
       <Chip size="small" label="Europe/Istanbul" variant="outlined" />
       <Typography className="identity-label">anonymous</Typography>

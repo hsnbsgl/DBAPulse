@@ -1,0 +1,4 @@
+CREATE INDEX IX_ManagementCorrelationGroups_StatusLastSeen ON dbo.ManagementCorrelationGroups(Status,LastSeenAtUtc DESC);
+CREATE INDEX IX_ManagementCorrelationGroups_EntityWindow ON dbo.ManagementCorrelationGroups(ServerId,DatabaseId,WindowStartUtc,WindowEndUtc);
+CREATE INDEX IX_ManagementRelatedSignals_Group ON dbo.ManagementRelatedSignals(CorrelationGroupId,StartedAtUtc);
+CREATE INDEX IX_ManagementRelatedSignals_Entity ON dbo.ManagementRelatedSignals(ServerId,DatabaseId,LastSeenAtUtc DESC);
