@@ -1,0 +1,14 @@
+services:
+  dbapulse-collector:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: dbapulse-collector
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      DBAPULSE_SOURCE_CONNECTION: ${DBAPULSE_SOURCE_CONNECTION}
+      DBAPULSE_MANAGEMENT_CONNECTION: ${DBAPULSE_MANAGEMENT_CONNECTION}
+      DBAPULSE_DISPLAY_TIMEZONE: ${DBAPULSE_DISPLAY_TIMEZONE:-Europe/Istanbul}
+      DBAPULSE_COLLECTION_INTERVAL_MINUTES: ${DBAPULSE_COLLECTION_INTERVAL_MINUTES:-5}
+      DBAPULSE_RUN_ONCE: ${DBAPULSE_RUN_ONCE:-false}

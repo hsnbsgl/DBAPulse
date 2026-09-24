@@ -1,0 +1,20 @@
+# Local secrets and environment overrides
+.env
+.env.*
+!.env.example
+*.secret
+*.secrets
+**/secrets/
+
+# Build output
+**/bin/
+**/obj/
+**/node_modules/
+**/dist/
+
+# Local/editor files
+.DS_Store
+.idea/
+.vscode/
+*.user
+*.suo
