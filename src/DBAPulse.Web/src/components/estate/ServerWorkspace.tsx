@@ -103,7 +103,7 @@ export default function ServerWorkspace({ serverId, onDatabase, onBack, fullPage
   const [error, setError] = useState('');
   useEffect(() => {
     let cancelled = false;
-    setData(undefined); setError(''); setTab(0);
+    setData(undefined); setError('');
     Promise.all([
       get<ServerDetail>(`/servers/${serverId}`),
       get<Page<CapacityDb>>(`/capacity/databases?serverId=${serverId}&page=1&pageSize=100`),
