@@ -59,6 +59,14 @@ function SortHeader({ label, sortKey, sort, onSort }: { label: string; sortKey: 
 
 const toggleSort = (current: SortState, key: string): SortState => current.key === key ? { key, direction: current.direction === 'asc' ? 'desc' : 'asc' } : { key, direction: 'asc' };
 
+const chartPageSize = 10;
+
+function ChartPager({ page, total, onChange }: { page: number; total: number; onChange: (page: number) => void }) {
+  const pageCount = Math.max(1, Math.ceil(total / chartPageSize));
+  if (pageCount <= 1) return null;
+  return <Stack direction="row" spacing={1} alignItems="center" sx={{ mt: 1 }}><Typography variant="caption" color="text.secondary">{total} kayıt · Sayfa {page} / {pageCount}</Typography><Box sx={{ flex: 1 }} /><Button size="small" disabled={page <= 1} onClick={() => onChange(page - 1)}>Önceki</Button><Button size="small" disabled={page >= pageCount} onClick={() => onChange(page + 1)}>Sonraki</Button></Stack>;
+}
+
 function AnomaliesTab({ data }: { data: WorkspaceData }) {
   const [sort, setSort] = useState<SortState>({ key: 'lastSeenAtUtc', direction: 'desc' });
   const rows = useMemo(() => sortRows(data.anomalies.items, sort, (row, key) => {
@@ -89,7 +97,10 @@ function ServerSummary({ data }: { data: WorkspaceData }) {
   const failedJobs = data.jobs.items.filter(x => x.lastRunStatus === 'Failed').length;
   const activeEvents = data.operations.items.filter(x => x.status === 'Active').length;
   const databaseHealth = chartCounts(data.server.databases.map(x => x.databaseStatus));
-  const sizedDatabases = data.capacity.items.filter(x => Number.isFinite(x.currentTotalSizeMb));
+  const sizedDatabases = data.capacity.items.filter(x => Number.isFinite(x.currentTotalSizeMb)).sort((left, right) => right.currentTotalSizeMb - left.currentTotalSizeMb);
+  const [chartPage, setChartPage] = useState(1);
+  useEffect(() => setChartPage(1), [data.capacity.items]);
+  const sizedPage = sizedDatabases.slice((chartPage - 1) * chartPageSize, chartPage * chartPageSize);
   return <Stack spacing={2}>
     <Box className="metric-grid">
       <KpiCard title="Databases" value={data.server.databases.length} subtitle={`${online} online`} tone={online === data.server.databases.length ? 'success' : 'warning'} />
@@ -111,14 +122,14 @@ function ServerSummary({ data }: { data: WorkspaceData }) {
     </Paper>
     <Box className="two-col">
       <Paper className="panel"><Typography variant="h6">Database Health</Typography><Divider sx={{ my: 1.5 }} /><DonutChart items={databaseHealth} height={260} /></Paper>
-      <Paper className="panel"><Typography variant="h6">Database Size</Typography><Divider sx={{ my: 1.5 }} />{sizedDatabases.length ? <HorizontalBarChart labels={sizedDatabases.map(x => x.databaseName)} values={sizedDatabases.map(x => x.currentTotalSizeMb)} valueName="Size (MB)" color={chartColors.info} height={Math.max(220, Math.min(420, sizedDatabases.length * 34 + 70))} /> : <EmptyState title="No capacity chart data" description="Database size telemetry is not available for this server." />}</Paper>
+      <Paper className="panel"><Typography variant="h6">Database Size</Typography><Divider sx={{ my: 1.5 }} />{sizedDatabases.length ? <><Box sx={{ width: '100%', maxWidth: 760, mr: 'auto' }}><HorizontalBarChart labels={sizedPage.map(x => x.databaseName)} values={sizedPage.map(x => x.currentTotalSizeMb)} valueName="Size (MB)" color={chartColors.info} height={Math.max(220, Math.min(420, sizedPage.length * 34 + 70))} /></Box><ChartPager page={chartPage} total={sizedDatabases.length} onChange={setChartPage} /></> : <EmptyState title="No capacity chart data" description="Database size telemetry is not available for this server." />}</Paper>
     </Box>
   </Stack>;
 }
 
 function DatabasesTab({ data, onDatabase }: { data: WorkspaceData; onDatabase: (id: number) => void }) {
   const capacityByDatabase = useMemo(() => new Map(data.capacity.items.map(x => [x.databaseId, x])), [data.capacity.items]);
-  const chartRows = data.capacity.items.filter(x => Number.isFinite(x.currentTotalSizeMb));
+  const chartRows = data.capacity.items.filter(x => Number.isFinite(x.currentTotalSizeMb)).sort((left, right) => right.currentTotalSizeMb - left.currentTotalSizeMb);
   const [sort, setSort] = useState<SortState>({ key: 'databaseName', direction: 'asc' });
   const rows = useMemo(() => sortRows(data.server.databases, sort, (row, key) => {
     if (key === 'currentTotalSizeMb') return capacityByDatabase.get(row.databaseId)?.currentTotalSizeMb;
@@ -127,7 +138,10 @@ function DatabasesTab({ data, onDatabase }: { data: WorkspaceData; onDatabase: (
     return row[key as keyof ServerDb];
   }), [data.server.databases, capacityByDatabase, sort]);
   const onSort = (key: string) => setSort(current => toggleSort(current, key));
-  return <Stack spacing={2}><Paper className="panel"><Typography variant="h6">Database Size by Database</Typography><Divider sx={{ my: 1.5 }} />{chartRows.length ? <HorizontalBarChart labels={chartRows.map(x => x.databaseName)} values={chartRows.map(x => x.currentTotalSizeMb)} valueName="Size (MB)" color={chartColors.actual} height={Math.max(240, Math.min(480, chartRows.length * 36 + 80))} /> : <EmptyState title="No capacity chart data" description="Database size telemetry is not available for this server." />}</Paper><Paper className="panel"><Typography variant="h6">Databases ({data.server.databases.length})</Typography><Divider sx={{ my: 1.5 }} />
+  const [chartPage, setChartPage] = useState(1);
+  useEffect(() => setChartPage(1), [data.capacity.items]);
+  const chartPageRows = chartRows.slice((chartPage - 1) * chartPageSize, chartPage * chartPageSize);
+  return <Stack spacing={2}><Paper className="panel"><Typography variant="h6">Database Size by Database</Typography><Divider sx={{ my: 1.5 }} />{chartRows.length ? <><Box sx={{ width: '100%', maxWidth: 900, mr: 'auto' }}><HorizontalBarChart labels={chartPageRows.map(x => x.databaseName)} values={chartPageRows.map(x => x.currentTotalSizeMb)} valueName="Size (MB)" color={chartColors.actual} height={Math.max(240, Math.min(480, chartPageRows.length * 36 + 80))} /></Box><ChartPager page={chartPage} total={chartRows.length} onChange={setChartPage} /></> : <EmptyState title="No capacity chart data" description="Database size telemetry is not available for this server." />}</Paper><Paper className="panel"><Typography variant="h6">Databases ({data.server.databases.length})</Typography><Divider sx={{ my: 1.5 }} />
     {data.server.databases.length ? <Table size="small"><TableHead><TableRow><SortHeader label="Database" sortKey="databaseName" sort={sort} onSort={onSort} /><SortHeader label="Status" sortKey="databaseStatus" sort={sort} onSort={onSort} /><SortHeader label="Recovery" sortKey="recoveryModel" sort={sort} onSort={onSort} /><SortHeader label="Current Size" sortKey="currentTotalSizeMb" sort={sort} onSort={onSort} /><SortHeader label="Growth 30d" sortKey="growth30dMb" sort={sort} onSort={onSort} /><SortHeader label="Last Seen" sortKey="lastSeenAtUtc" sort={sort} onSort={onSort} /></TableRow></TableHead><TableBody>{rows.map(db => { const capacity = capacityByDatabase.get(db.databaseId); return <TableRow hover className="clickable" key={db.databaseId} onClick={() => onDatabase(db.databaseId)}><TableCell>{db.databaseName}</TableCell><TableCell><StatusChip value={db.databaseStatus} /></TableCell><TableCell>{db.recoveryModel}</TableCell><TableCell>{mb(capacity?.currentTotalSizeMb)}</TableCell><TableCell>{capacity?.growth30dMb == null ? 'N/A' : `${capacity.growth30dMb.toLocaleString()} MB`}</TableCell><TableCell>{date(db.lastSeenAtUtc)}</TableCell></TableRow>; })}</TableBody></Table> : <EmptyState title="No databases found" description="No database telemetry is associated with this server." />}
   </Paper></Stack>;
 }
@@ -189,7 +203,7 @@ function JobsTab({ data }: { data: WorkspaceData }) {
 }
 
 function CapacityTab({ data }: { data: WorkspaceData }) {
-  const databaseRows = data.capacity.items.filter(x => Number.isFinite(x.currentTotalSizeMb));
+  const databaseRows = data.capacity.items.filter(x => Number.isFinite(x.currentTotalSizeMb)).sort((left, right) => right.currentTotalSizeMb - left.currentTotalSizeMb);
   const volumeRows = data.volumes.items.filter(x => Number.isFinite(x.freePercent));
   const [databaseSort, setDatabaseSort] = useState<SortState>({ key: 'databaseName', direction: 'asc' });
   const [volumeSort, setVolumeSort] = useState<SortState>({ key: 'volumeId', direction: 'asc' });
@@ -197,8 +211,11 @@ function CapacityTab({ data }: { data: WorkspaceData }) {
   const sortedVolumes = useMemo(() => sortRows(data.volumes.items, volumeSort, (row, key) => row[key as keyof Volume]), [data.volumes.items, volumeSort]);
   const onDatabaseSort = (key: string) => setDatabaseSort(current => toggleSort(current, key));
   const onVolumeSort = (key: string) => setVolumeSort(current => toggleSort(current, key));
+  const [databaseChartPage, setDatabaseChartPage] = useState(1);
+  useEffect(() => setDatabaseChartPage(1), [data.capacity.items]);
+  const databaseChartPageRows = databaseRows.slice((databaseChartPage - 1) * chartPageSize, databaseChartPage * chartPageSize);
   return <Stack spacing={2}>
-    {(databaseRows.length > 0 || volumeRows.length > 0) && <Box className="two-col"><Paper className="panel"><Typography variant="h6">Database Size</Typography><Divider sx={{ my: 1.5 }} />{databaseRows.length ? <HorizontalBarChart labels={databaseRows.map(x => x.databaseName)} values={databaseRows.map(x => x.currentTotalSizeMb)} valueName="Size (MB)" color={chartColors.info} height={Math.max(220, Math.min(360, databaseRows.length * 38 + 70))} /> : <EmptyState title="No database size data" description="Database capacity telemetry is not available for this server." />}</Paper><Paper className="panel"><Typography variant="h6">Volume Free Capacity</Typography><Divider sx={{ my: 1.5 }} />{volumeRows.length ? <HorizontalBarChart labels={volumeRows.map(x => x.volumeId)} values={volumeRows.map(x => x.freePercent)} valueName="Free (%)" color={chartColors.success} height={Math.max(220, Math.min(360, volumeRows.length * 38 + 70))} /> : <EmptyState title="No volume data" description="Volume capacity telemetry is not available for this server." />}</Paper></Box>}
+    {(databaseRows.length > 0 || volumeRows.length > 0) && <Box className="two-col"><Paper className="panel"><Typography variant="h6">Database Size</Typography><Divider sx={{ my: 1.5 }} />{databaseRows.length ? <><Box sx={{ width: '100%', maxWidth: 760, mr: 'auto' }}><HorizontalBarChart labels={databaseChartPageRows.map(x => x.databaseName)} values={databaseChartPageRows.map(x => x.currentTotalSizeMb)} valueName="Size (MB)" color={chartColors.info} height={Math.max(220, Math.min(360, databaseChartPageRows.length * 38 + 70))} /></Box><ChartPager page={databaseChartPage} total={databaseRows.length} onChange={setDatabaseChartPage} /></> : <EmptyState title="No database size data" description="Database capacity telemetry is not available for this server." />}</Paper><Paper className="panel"><Typography variant="h6">Volume Free Capacity</Typography><Divider sx={{ my: 1.5 }} />{volumeRows.length ? <HorizontalBarChart labels={volumeRows.map(x => x.volumeId)} values={volumeRows.map(x => x.freePercent)} valueName="Free (%)" color={chartColors.success} height={Math.max(220, Math.min(360, volumeRows.length * 38 + 70))} /> : <EmptyState title="No volume data" description="Volume capacity telemetry is not available for this server." />}</Paper></Box>}
     <Paper className="panel"><Typography variant="h6">Database Capacity</Typography><Divider sx={{ my: 1.5 }} />{data.capacity.items.length ? <Table size="small"><TableHead><TableRow><SortHeader label="Status" sortKey="capacityStatus" sort={databaseSort} onSort={onDatabaseSort} /><SortHeader label="Database" sortKey="databaseName" sort={databaseSort} onSort={onDatabaseSort} /><SortHeader label="Current" sortKey="currentTotalSizeMb" sort={databaseSort} onSort={onDatabaseSort} /><SortHeader label="Growth 30d" sortKey="growth30dMb" sort={databaseSort} onSort={onDatabaseSort} /><SortHeader label="Forecast" sortKey="forecastStatus" sort={databaseSort} onSort={onDatabaseSort} /></TableRow></TableHead><TableBody>{sortedDatabases.map(x => <TableRow key={x.databaseId}><TableCell><StatusChip value={x.capacityStatus} /></TableCell><TableCell>{x.databaseName}</TableCell><TableCell>{mb(x.currentTotalSizeMb)}</TableCell><TableCell>{x.growth30dMb == null ? 'N/A' : `${x.growth30dMb.toLocaleString()} MB`}</TableCell><TableCell><StatusChip value={x.forecastStatus} /></TableCell></TableRow>)}</TableBody></Table> : <EmptyState title="No capacity data" description="No database capacity telemetry is associated with this server." />}</Paper><Paper className="panel"><Typography variant="h6">Volume Capacity</Typography><Divider sx={{ my: 1.5 }} />{data.volumes.items.length ? <Table size="small"><TableHead><TableRow><SortHeader label="Status" sortKey="capacityStatus" sort={volumeSort} onSort={onVolumeSort} /><SortHeader label="Volume" sortKey="volumeId" sort={volumeSort} onSort={onVolumeSort} /><SortHeader label="Total" sortKey="totalBytes" sort={volumeSort} onSort={onVolumeSort} /><SortHeader label="Available" sortKey="availableBytes" sort={volumeSort} onSort={onVolumeSort} /><SortHeader label="Free" sortKey="freePercent" sort={volumeSort} onSort={onVolumeSort} /></TableRow></TableHead><TableBody>{sortedVolumes.map(x => <TableRow key={x.id}><TableCell><StatusChip value={x.capacityStatus} /></TableCell><TableCell>{x.volumeId}</TableCell><TableCell>{bytes(x.totalBytes)}</TableCell><TableCell>{bytes(x.availableBytes)}</TableCell><TableCell>{x.freePercent}%</TableCell></TableRow>)}</TableBody></Table> : <EmptyState title="No volume data available" description="Volume capacity telemetry has not been collected for this server." />}</Paper></Stack>;
 }
 
