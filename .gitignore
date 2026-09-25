@@ -11,6 +11,7 @@
 **/obj/
 **/node_modules/
 **/dist/
+*.tsbuildinfo
 
 # Local/editor files
 .DS_Store

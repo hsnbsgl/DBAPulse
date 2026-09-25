@@ -1,5 +1,5 @@
-import { useEffect, useState, type ReactNode } from 'react';
-import { AppBar, Box, Chip, Collapse, Drawer, List, ListItemButton, ListItemIcon, ListItemText, Toolbar, Typography } from '@mui/material';
+import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
+import { AppBar, Box, Chip, Collapse, Drawer, FormControl, List, ListItemButton, ListItemIcon, ListItemText, MenuItem, Select, Toolbar, Typography } from '@mui/material';
 import DnsIcon from '@mui/icons-material/Dns';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
@@ -25,10 +25,39 @@ const nav: NavItem[] = [
 type SidebarServer = { serverId: number; serverName: string; databaseCount: number; healthStatus: string };
 type SidebarHealth = { entityType: string; serverId: number; overallStatus: string };
 
+type ServerFilterContextValue = {
+  selectedServerId: number;
+  setSelectedServerId: (serverId: number) => void;
+  servers: SidebarServer[];
+};
+
+const ServerFilterContext = createContext<ServerFilterContextValue | null>(null);
+
+export function useServerFilter() {
+  const context = useContext(ServerFilterContext);
+  if (!context) throw new Error('useServerFilter must be used inside AppShell');
+  return context;
+}
+
+function ServerSelector({ servers, value, onChange }: { servers: SidebarServer[]; value: number; onChange: (serverId: number) => void }) {
+  return <FormControl size="small" className="global-server-selector">
+    <Select
+      value={String(value)}
+      onChange={event => onChange(Number(event.target.value))}
+      displayEmpty
+      inputProps={{ 'aria-label': 'Server scope' }}
+    >
+      <MenuItem value="0">All servers</MenuItem>
+      {servers.map(server => <MenuItem key={server.serverId} value={String(server.serverId)}>{server.serverName}</MenuItem>)}
+    </Select>
+  </FormControl>;
+}
+
 export default function AppShell({ activeView, onNavigate, onServerSelect, children }: { activeView: string; onNavigate: (view: string) => void; onServerSelect?: (serverId: number) => void; children: ReactNode }) {
   const active = ['server', 'database'].includes(activeView) ? 'estate' : activeView;
   const [servers, setServers] = useState<SidebarServer[]>([]);
   const [serversOpen, setServersOpen] = useState(active === 'estate');
+  const [selectedServerId, setSelectedServerId] = useState(0);
   useEffect(() => {
     const base = import.meta.env.VITE_API_BASE_URL || '/api';
     Promise.all([fetch(`${base}/servers`), fetch(`${base}/management/health`)]).then(async ([serverResponse, healthResponse]) => {
@@ -40,17 +69,19 @@ export default function AppShell({ activeView, onNavigate, onServerSelect, child
     }).catch(() => setServers([]));
   }, []);
   useEffect(() => { if (active === 'estate') setServersOpen(true); }, [active]);
-  return <Box className="app-shell">
+  const showServerSelector = !['dashboard', 'estate', 'server', 'database'].includes(activeView);
+  return <ServerFilterContext.Provider value={{ selectedServerId, setSelectedServerId, servers }}><Box className="app-shell">
     <AppBar position="fixed" className="topbar"><Toolbar>
       <Typography className="topbar-title">DBA PULSE</Typography>
       <Typography className="topbar-subtitle">SQL Server Performance Monitor</Typography>
       <Box sx={{ flex: 1 }} />
+      {showServerSelector && <><Typography className="server-selector-label">Server</Typography><ServerSelector servers={servers} value={selectedServerId} onChange={setSelectedServerId} /></>}
       <Chip size="small" label="Europe/Istanbul" variant="outlined" />
       <Typography className="identity-label">anonymous</Typography>
     </Toolbar></AppBar>
     <Drawer variant="permanent" className="drawer"><Toolbar className="drawer-brand"><Box className="brand-mark"><TimelineIcon /></Box><Box><Typography className="brand-title">DBA PULSE</Typography><Typography className="brand-caption">SQL operations cockpit</Typography></Box></Toolbar>
-      <List className="nav-list">{nav.map(item => item.key === 'estate' ? <Box key={item.key} className="estate-nav-group"><ListItemButton className="estate-nav-item" selected={active === item.key || active === 'dashboard'} onClick={() => { onNavigate(item.target || item.key); setServersOpen(open => !open); }}><ListItemIcon>{item.icon}</ListItemIcon><ListItemText primary={item.label} /><Box className="nav-expand-icon">{serversOpen ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}</Box></ListItemButton><Collapse in={serversOpen} timeout="auto" unmountOnExit><List component="div" disablePadding className="server-nav-sublist">{servers.map(server => <ListItemButton key={server.serverId} className="server-nav-item" onClick={() => onServerSelect?.(server.serverId)}><ListItemIcon><Box component="span" className={`server-health-led server-health-${server.healthStatus.toLowerCase()}`} title={`${server.serverName}: ${server.healthStatus}`} aria-label={`${server.serverName}: ${server.healthStatus}`} /></ListItemIcon><ListItemText primary={server.serverName} secondary={`${server.healthStatus} · ${server.databaseCount} DB`} /></ListItemButton>)}</List></Collapse></Box> : <ListItemButton key={item.key} selected={active === item.key} onClick={() => onNavigate(item.target || item.key)}><ListItemIcon>{item.icon}</ListItemIcon><ListItemText primary={item.label} /></ListItemButton>)}</List>
+      <List className="nav-list">{nav.map(item => item.key === 'estate' ? <Box key={item.key} className="estate-nav-group"><ListItemButton className="estate-nav-item" selected={active === item.key || active === 'dashboard'} onClick={() => { onNavigate(item.target || item.key); setServersOpen(open => !open); }}><ListItemIcon>{item.icon}</ListItemIcon><ListItemText primary={item.label} /><Box className="nav-expand-icon">{serversOpen ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}</Box></ListItemButton><Collapse in={serversOpen} timeout="auto" unmountOnExit><List component="div" disablePadding className="server-nav-sublist">{servers.map(server => <ListItemButton key={server.serverId} className="server-nav-item" onClick={() => { setSelectedServerId(server.serverId); onServerSelect?.(server.serverId); }}><ListItemIcon><Box component="span" className={`server-health-led server-health-${server.healthStatus.toLowerCase()}`} title={`${server.serverName}: ${server.healthStatus}`} aria-label={`${server.serverName}: ${server.healthStatus}`} /></ListItemIcon><ListItemText primary={server.serverName} secondary={`${server.healthStatus} · ${server.databaseCount} DB`} /></ListItemButton>)}</List></Collapse></Box> : <ListItemButton key={item.key} selected={active === item.key} onClick={() => onNavigate(item.target || item.key)}><ListItemIcon>{item.icon}</ListItemIcon><ListItemText primary={item.label} /></ListItemButton>)}</List>
     </Drawer>
     <Box component="main" className="main"><Box className="content">{children}</Box></Box>
-  </Box>;
+  </Box></ServerFilterContext.Provider>;
 }
