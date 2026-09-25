@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
-import { Alert, Box, Button, Chip, Divider, Paper, Stack, Tab, Table, TableBody, TableCell, TableHead, TableRow, TableSortLabel, Tabs, Typography } from '@mui/material';
+import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
+import { Alert, Box, Button, Chip, Divider, MenuItem, Paper, Select, Stack, Tab, Table, TableBody, TableCell, TableHead, TableRow, TableSortLabel, Tabs, Typography } from '@mui/material';
 import { KpiCard, EmptyState, StatusChip } from '../common/Ui';
 import DonutChart from '../charts/DonutChart';
 import HorizontalBarChart from '../charts/HorizontalBarChart';
@@ -67,17 +67,100 @@ function ChartPager({ page, total, onChange }: { page: number; total: number; on
   return <Stack direction="row" spacing={1} alignItems="center" sx={{ mt: 1 }}><Typography variant="caption" color="text.secondary">{total} kayıt · Sayfa {page} / {pageCount}</Typography><Box sx={{ flex: 1 }} /><Button size="small" disabled={page <= 1} onClick={() => onChange(page - 1)}>Önceki</Button><Button size="small" disabled={page >= pageCount} onClick={() => onChange(page + 1)}>Sonraki</Button></Stack>;
 }
 
+const ALL_RECORDS = -1;
+
+function RecordSizeSelect({ value, onChange }: { value: number; onChange: (value: number) => void }) {
+  return <Stack direction="row" spacing={1} alignItems="center" justifyContent="flex-end" sx={{ my: 1 }}><Typography variant="caption" color="text.secondary">Kayıt</Typography><Select size="small" value={value} onChange={event => onChange(Number(event.target.value))}>{[10, 20, 30, 40, 50].map(size => <MenuItem key={size} value={size}>{size}</MenuItem>)}<MenuItem value={ALL_RECORDS}>All records</MenuItem></Select></Stack>;
+}
+
+type ResizeDirection = 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw';
+
+function useResizablePanels(containerRef: RefObject<HTMLDivElement | null>, serverId: number, tab: number, ready: boolean) {
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container || !ready) return undefined;
+    const panels = Array.from(container.querySelectorAll<HTMLElement>('.panel:not(.server-tabs-panel)'));
+    const cleanups: Array<() => void> = [];
+    const directions: ResizeDirection[] = ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'];
+
+    panels.forEach((panel, index) => {
+      const title = panel.querySelector<HTMLElement>('.MuiTypography-h6')?.textContent?.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-') || 'panel';
+      const storageKey = `dbapulse.server-panel-size.v1.${serverId}.${tab}.${index}.${title}`;
+      panel.classList.add('workspace-resizable-panel');
+      try {
+        const saved = JSON.parse(localStorage.getItem(storageKey) || 'null') as { width?: number; height?: number } | null;
+        if (saved?.width) panel.style.width = `${saved.width}px`;
+        if (saved?.height) panel.style.height = `${saved.height}px`;
+      } catch { /* Ignore malformed local layout state. */ }
+
+      directions.forEach(direction => {
+        const handle = document.createElement('span');
+        handle.className = `workspace-resize-handle workspace-resize-${direction}`;
+        handle.setAttribute('aria-label', `Resize panel ${direction}`);
+        handle.setAttribute('role', 'separator');
+        panel.appendChild(handle);
+        let cleanupDrag: (() => void) | undefined;
+        const onPointerDown = (event: PointerEvent) => {
+          event.preventDefault();
+          event.stopPropagation();
+          const start = panel.getBoundingClientRect();
+          const minWidth = 280;
+          const minHeight = 120;
+          const horizontal = direction.includes('e') || direction.includes('w');
+          const vertical = direction.includes('n') || direction.includes('s');
+          const bodyCursor = document.body.style.cursor;
+          const userSelect = document.body.style.userSelect;
+          document.body.style.cursor = horizontal && vertical ? `${direction}-resize` : `${direction}-resize`;
+          document.body.style.userSelect = 'none';
+          const onPointerMove = (moveEvent: PointerEvent) => {
+            const dx = moveEvent.clientX - event.clientX;
+            const dy = moveEvent.clientY - event.clientY;
+            const nextWidth = horizontal ? Math.max(minWidth, direction.includes('w') ? start.width - dx : start.width + dx) : start.width;
+            const nextHeight = vertical ? Math.max(minHeight, direction.includes('n') ? start.height - dy : start.height + dy) : start.height;
+            panel.style.width = `${nextWidth}px`;
+            panel.style.height = `${nextHeight}px`;
+            panel.style.transform = `${direction.includes('w') ? `translateX(${dx}px)` : ''}${direction.includes('n') ? ` translateY(${dy}px)` : ''}`.trim();
+          };
+          const onPointerUp = () => {
+            const rect = panel.getBoundingClientRect();
+            panel.style.transform = '';
+            localStorage.setItem(storageKey, JSON.stringify({ width: Math.round(rect.width), height: Math.round(rect.height) }));
+            document.body.style.cursor = bodyCursor;
+            document.body.style.userSelect = userSelect;
+            window.removeEventListener('pointermove', onPointerMove);
+            window.removeEventListener('pointerup', onPointerUp);
+            cleanupDrag = undefined;
+          };
+          window.addEventListener('pointermove', onPointerMove);
+          window.addEventListener('pointerup', onPointerUp, { once: true });
+          cleanupDrag = () => {
+            window.removeEventListener('pointermove', onPointerMove);
+            window.removeEventListener('pointerup', onPointerUp);
+            document.body.style.cursor = bodyCursor;
+            document.body.style.userSelect = userSelect;
+          };
+        };
+        handle.addEventListener('pointerdown', onPointerDown);
+        cleanups.push(() => { cleanupDrag?.(); handle.removeEventListener('pointerdown', onPointerDown); handle.remove(); });
+      });
+    });
+    return () => cleanups.forEach(cleanup => cleanup());
+  }, [containerRef, serverId, tab, ready]);
+}
+
 function AnomaliesTab({ data }: { data: WorkspaceData }) {
+  const [pageSize, setPageSize] = useState(10);
   const [sort, setSort] = useState<SortState>({ key: 'lastSeenAtUtc', direction: 'desc' });
   const rows = useMemo(() => sortRows(data.anomalies.items, sort, (row, key) => {
     if (key === 'entity') return row.databaseName || row.entityKey || '';
     return row[key as keyof Anomaly];
   }), [data.anomalies.items, sort]);
+  const visibleRows = rows.slice(0, pageSize === ALL_RECORDS ? rows.length : pageSize);
   const severityCounts = chartCounts(data.anomalies.items.map(row => row.severity));
   const onSort = (key: string) => setSort(current => toggleSort(current, key));
   return <Stack spacing={2}>
     {data.anomalies.items.length > 0 && <Paper className="panel"><Typography variant="h6">Anomaly Severity</Typography><Divider sx={{ my: 1.5 }} /><DonutChart items={severityCounts} height={250} /></Paper>}
-    <Paper className="panel"><Typography variant="h6">Anomalies ({data.anomalies.totalCount})</Typography><Divider sx={{ my: 1.5 }} />{data.anomalies.items.length ? <Table size="small"><TableHead><TableRow><SortHeader label="Severity" sortKey="severity" sort={sort} onSort={onSort} /><SortHeader label="Metric" sortKey="metricType" sort={sort} onSort={onSort} /><SortHeader label="Database / Entity" sortKey="entity" sort={sort} onSort={onSort} /><SortHeader label="Observed" sortKey="observedValue" sort={sort} onSort={onSort} /><SortHeader label="Median" sortKey="baselineMedian" sort={sort} onSort={onSort} /><SortHeader label="P95" sortKey="baselineP95" sort={sort} onSort={onSort} /><SortHeader label="Deviation" sortKey="deviationRatio" sort={sort} onSort={onSort} /><SortHeader label="Status" sortKey="status" sort={sort} onSort={onSort} /><SortHeader label="Last Seen" sortKey="lastSeenAtUtc" sort={sort} onSort={onSort} /></TableRow></TableHead><TableBody>{rows.map(row => <TableRow key={row.id}><TableCell><StatusChip value={row.severity} /></TableCell><TableCell>{row.metricType}</TableCell><TableCell>{row.databaseName || row.entityKey || 'N/A'}</TableCell><TableCell>{row.observedValue.toLocaleString()}</TableCell><TableCell>{row.baselineMedian.toLocaleString()}</TableCell><TableCell>{row.baselineP95.toLocaleString()}</TableCell><TableCell>{row.deviationRatio == null ? 'N/A' : `${row.deviationRatio.toFixed(2)}x`}</TableCell><TableCell><StatusChip value={row.status} /></TableCell><TableCell>{date(row.lastSeenAtUtc)}</TableCell></TableRow>)}</TableBody></Table> : <EmptyState title="No anomalies for this server" description="No anomaly findings are available for the selected server." />}</Paper>
+    <Paper className="panel"><Stack direction="row" justifyContent="space-between" alignItems="center"><Typography variant="h6">Anomalies ({data.anomalies.totalCount})</Typography><RecordSizeSelect value={pageSize} onChange={setPageSize} /></Stack><Divider sx={{ my: 1.5 }} />{data.anomalies.items.length ? <Table size="small"><TableHead><TableRow><SortHeader label="Severity" sortKey="severity" sort={sort} onSort={onSort} /><SortHeader label="Metric" sortKey="metricType" sort={sort} onSort={onSort} /><SortHeader label="Database / Entity" sortKey="entity" sort={sort} onSort={onSort} /><SortHeader label="Observed" sortKey="observedValue" sort={sort} onSort={onSort} /><SortHeader label="Median" sortKey="baselineMedian" sort={sort} onSort={onSort} /><SortHeader label="P95" sortKey="baselineP95" sort={sort} onSort={onSort} /><SortHeader label="Deviation" sortKey="deviationRatio" sort={sort} onSort={onSort} /><SortHeader label="Status" sortKey="status" sort={sort} onSort={onSort} /><SortHeader label="Last Seen" sortKey="lastSeenAtUtc" sort={sort} onSort={onSort} /></TableRow></TableHead><TableBody>{visibleRows.map(row => <TableRow key={row.id}><TableCell><StatusChip value={row.severity} /></TableCell><TableCell>{row.metricType}</TableCell><TableCell>{row.databaseName || row.entityKey || 'N/A'}</TableCell><TableCell>{row.observedValue.toLocaleString()}</TableCell><TableCell>{row.baselineMedian.toLocaleString()}</TableCell><TableCell>{row.baselineP95.toLocaleString()}</TableCell><TableCell>{row.deviationRatio == null ? 'N/A' : `${row.deviationRatio.toFixed(2)}x`}</TableCell><TableCell><StatusChip value={row.status} /></TableCell><TableCell>{date(row.lastSeenAtUtc)}</TableCell></TableRow>)}</TableBody></Table> : <EmptyState title="No anomalies for this server" description="No anomaly findings are available for the selected server." />}</Paper>
   </Stack>;
 }
 
@@ -235,6 +318,8 @@ export default function ServerWorkspace({ serverId, onDatabase, onBack, fullPage
   const [data, setData] = useState<WorkspaceData>();
   const [tab, setTab] = useState(0);
   const [error, setError] = useState('');
+  const panelRoot = useRef<HTMLDivElement>(null);
+  useResizablePanels(panelRoot, serverId, tab, Boolean(data));
   useEffect(() => {
     let cancelled = false;
     setData(undefined); setError('');
@@ -261,7 +346,7 @@ export default function ServerWorkspace({ serverId, onDatabase, onBack, fullPage
   if (error) return <Alert severity="error">Unable to load server data: {error}</Alert>;
   if (!data) return <Typography color="text.secondary">Loading server telemetry…</Typography>;
   const tabs = ['Overview', 'Databases', 'Performance', 'Protection', 'Always On', 'Jobs', 'Capacity', 'Operations', 'Anomalies'];
-  return <Stack spacing={2}>
+  return <Stack ref={panelRoot} spacing={2}>
     {fullPage && onBack && <Button variant="text" onClick={onBack}>← Servers &amp; Databases</Button>}
     <Stack direction="row" justifyContent="space-between" alignItems="flex-start" spacing={2}>
       <Box><Typography variant="h4">{data.server.server.serverName}</Typography><Typography color="text.secondary">Server operations workspace · {data.server.server.instanceName}</Typography></Box>
