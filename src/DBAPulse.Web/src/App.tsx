@@ -12,6 +12,7 @@ import ForecastChart from './components/charts/ForecastChart';
 import HorizontalBarChart from './components/charts/HorizontalBarChart';
 import TimeSeriesChart from './components/charts/TimeSeriesChart';
 import ServerWorkspace from './components/estate/ServerWorkspace';
+import * as XLSX from 'xlsx';
 
 const api = import.meta.env.VITE_API_BASE_URL || '/api';
 const tz = import.meta.env.VITE_DISPLAY_TIMEZONE || 'Europe/Istanbul';
@@ -50,16 +51,16 @@ type AnomalyRow = { id:number; metricType:string; serverName:string; databaseNam
 type AnomalyDetail = AnomalyRow & { baselineP99:number; baselineMad:number; windowDays:number; endedAtUtc?:string; observationCount:number; sourceEntityId?:number; fingerprint:string };
 
 const statusColor = (status: string) => status === 'Healthy' || status === 'Success' || status === 'ONLINE' ? 'success' : status === 'Critical' || status === 'Failed' ? 'error' : 'warning';
-function Metric({ label, value, tone }: {label:string; value:string|number; tone?: 'success'|'warning'|'error'}) { return <KpiCard title={label} value={value} tone={tone} />; }function exportCsv(filename: string, rows: unknown[]) {
+function Metric({ label, value, tone }: {label:string; value:string|number; tone?: 'success'|'warning'|'error'}) { return <KpiCard title={label} value={value} tone={tone} />; }function exportXlsx(filename: string, rows: unknown[]) {
   if (!rows.length) return;
   const records = rows.map(row => row && typeof row === 'object' ? row as Record<string, unknown> : { value: row });
-  const headers = Array.from(new Set(records.flatMap(row => Object.keys(row))));
-  const csv = [headers.join(','), ...records.map(row => headers.map(key => JSON.stringify(row[key] ?? '')).join(','))].join('\n');
-  const blob = new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8;' });
-  const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = filename + '.csv'; link.click(); URL.revokeObjectURL(link.href);
+  const worksheet = XLSX.utils.json_to_sheet(records);
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, worksheet, 'Data');
+  XLSX.writeFile(workbook, `${filename}.xlsx`);
 }
 function ListTools({ filename, rows, pageSize, onPageSizeChange }: { filename: string; rows: unknown[]; pageSize: number; onPageSizeChange: (size: number) => void }) {
-  return <Stack direction="row" spacing={1} alignItems="center" justifyContent="flex-end" flexWrap="wrap" useFlexGap sx={{ my: 1 }}><Typography variant="caption" color="text.secondary">Kayıt</Typography><Select size="small" value={pageSize} onChange={event => onPageSizeChange(Number(event.target.value))}>{[10, 20, 30, 40, 50].map(size => <MenuItem key={size} value={size}>{size}</MenuItem>)}</Select><Button size="small" variant="outlined" onClick={() => exportCsv(filename, rows)}>Excel'e Aktar</Button></Stack>;
+  return <Stack direction="row" spacing={1} alignItems="center" justifyContent="flex-end" flexWrap="wrap" useFlexGap sx={{ my: 1 }}><Typography variant="caption" color="text.secondary">Kayıt</Typography><Select size="small" value={pageSize} onChange={event => onPageSizeChange(Number(event.target.value))}>{[10, 20, 30, 40, 50].map(size => <MenuItem key={size} value={size}>{size}</MenuItem>)}</Select><Button size="small" variant="outlined" onClick={() => exportXlsx(filename, rows)}>Excel'e Aktar</Button></Stack>;
 }
 function State({ value }: {value:string}) { return <StatusChip value={value} />; }
 type ServerCardModel = Server & { items: Database[]; critical: number; warning: number; healthy: number; status: 'Critical' | 'Warning' | 'Healthy'; totalSize: number };
