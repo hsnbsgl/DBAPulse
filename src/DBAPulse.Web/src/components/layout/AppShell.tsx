@@ -19,7 +19,6 @@ const nav: NavItem[] = [
   { key: 'operations', label: 'Blocking & Deadlocks', icon: <CrisisAlertIcon /> },
   { key: 'insights', label: 'Anomalies', icon: <CrisisAlertIcon /> },
   { key: 'capacity', label: 'FinOps & Capacity', icon: <StorageIcon /> },
-  { key: 'collections', label: 'Collection Runs', icon: <TimelineIcon />, target: 'dashboard' },
   { key: 'audit', label: 'Audit Trail', icon: <FactCheckIcon /> },
 ];
 
