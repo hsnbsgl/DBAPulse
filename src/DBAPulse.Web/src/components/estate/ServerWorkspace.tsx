@@ -5,15 +5,15 @@ import ListToolbar, { ALL_RECORDS, useListRefresh } from '../common/ListToolbar'
 import DonutChart from '../charts/DonutChart';
 import HorizontalBarChart from '../charts/HorizontalBarChart';
 import { chartColors } from '../charts/chartTheme';
+import { formatDateTime } from '../common/date';
 
 const api = import.meta.env.VITE_API_BASE_URL || '/api';
-const tz = import.meta.env.VITE_DISPLAY_TIMEZONE || 'Europe/Istanbul';
 const get = async <T,>(path: string): Promise<T> => {
   const response = await fetch(`${api}${path}`);
   if (!response.ok) throw new Error(`API request failed (${response.status})`);
   return response.json();
 };
-const date = (value?: string | null) => value ? new Intl.DateTimeFormat('en-GB', { timeZone: tz, dateStyle: 'short', timeStyle: 'medium' }).format(new Date(value)) : 'N/A';
+const date = formatDateTime;
 const mb = (value?: number | null) => value == null ? 'N/A' : `${value.toLocaleString('en-US', { maximumFractionDigits: 1 })} MB`;
 const bytes = (value?: number | null) => {
   if (value == null) return 'N/A';
@@ -203,6 +203,11 @@ function ServerSummary({ data }: { data: WorkspaceData }) {
   </Stack>;
 }
 
+function AiSummaryTab({ serverId }: { serverId: number }) {
+  const [loading, setLoading] = useState(true); const [summary, setSummary] = useState(''); const [error, setError] = useState('');
+  useEffect(() => { let cancelled = false; setLoading(true); fetch(`${api}/servers/${serverId}/ai-summary`, { method: 'POST' }).then(async response => { const value = await response.json(); if (cancelled) return; if (!value.configured || value.error) setError(value.error || 'AI provider is not configured.'); else setSummary(value.summary); }).catch(() => !cancelled && setError('AI provider could not be reached.')).finally(() => !cancelled && setLoading(false)); return () => { cancelled = true; }; }, [serverId]);
+  return <Paper className="panel ai-summary-panel"><Stack spacing={1.5}><Typography variant="h6">AI Summary</Typography><Typography variant="body2" color="text.secondary">Generated from the latest collected server and health data.</Typography>{loading ? <Typography color="text.secondary">Generating summary…</Typography> : error ? <Alert severity="info">{error} <a href="?view=settings">Open Settings</a></Alert> : <Typography className="ai-summary-text">{summary}</Typography>}</Stack></Paper>;
+}
 function DatabasesTab({ data, onDatabase }: { data: WorkspaceData; onDatabase: (id: number) => void }) {
   const capacityByDatabase = useMemo(() => new Map(data.capacity.items.map(x => [x.databaseId, x])), [data.capacity.items]);
   const chartRows = data.capacity.items.filter(x => Number.isFinite(x.currentTotalSizeMb)).sort((left, right) => right.currentTotalSizeMb - left.currentTotalSizeMb);
@@ -416,7 +421,7 @@ export default function ServerWorkspace({ serverId, onDatabase, onBack, fullPage
 
   if (error) return <Alert severity="error">Unable to load server data: {error}</Alert>;
   if (!data) return <Typography color="text.secondary">Loading server telemetry…</Typography>;
-  const tabs = ['Overview', 'Databases', 'Performance', 'Protection', 'Always On', 'Jobs', 'Capacity', 'Operations', 'Anomalies'];
+  const tabs = ['Overview', 'Databases', 'Performance', 'Protection', 'Always On', 'Jobs', 'Capacity', 'Operations', 'Anomalies', 'AI Summary'];
   return <Stack ref={panelRoot} spacing={2}>
     {fullPage && onBack && <Button variant="text" onClick={onBack}>← Servers &amp; Databases</Button>}
     <Stack direction="row" justifyContent="space-between" alignItems="flex-start" spacing={2}>
@@ -432,6 +437,6 @@ export default function ServerWorkspace({ serverId, onDatabase, onBack, fullPage
     {tab === 5 && <JobsTab data={data} />}
     {tab === 6 && <CapacityTab data={data} />}
     {tab === 7 && <OperationsTab data={data} />}
-    {tab === 8 && <AnomaliesTab data={data} />}
+    {tab === 8 && <AnomaliesTab data={data} />} {tab === 9 && <AiSummaryTab serverId={serverId} />}
   </Stack>;
 }

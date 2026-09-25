@@ -12,12 +12,13 @@ import ForecastChart from './components/charts/ForecastChart';
 import HorizontalBarChart from './components/charts/HorizontalBarChart';
 import TimeSeriesChart from './components/charts/TimeSeriesChart';
 import ServerWorkspace from './components/estate/ServerWorkspace';
+import SettingsView from './components/SettingsView';
 import ListToolbar, { ALL_RECORDS, useListRefresh } from './components/common/ListToolbar';
+import { formatDateTime } from './components/common/date';
 
 const api = import.meta.env.VITE_API_BASE_URL || '/api';
-const tz = import.meta.env.VITE_DISPLAY_TIMEZONE || 'Europe/Istanbul';
 const get = async <T,>(path: string): Promise<T> => { const response = await fetch(`${api}${path}`); if (!response.ok) throw new Error(`API request failed (${response.status})`); return response.json(); };
-const date = (value?: string | null) => value ? new Intl.DateTimeFormat('en-GB', { timeZone: tz, dateStyle: 'short', timeStyle: 'medium' }).format(new Date(value)) : 'N/A';
+const date = formatDateTime;
 const mb = (value?: number | null) => value == null ? 'N/A' : `${value.toLocaleString('en-US', { maximumFractionDigits: 1 })} MB`;
 type Overview = { totalServers:number; totalDatabases:number; onlineDatabases:number; warningDatabases:number; offlineDatabases:number; lastCollectionStatus?:string; lastCollectionStartedAtUtc?:string; lastCollectionFinishedAtUtc?:string; lastCollectionDurationMs?:number; collectionErrorCount:number };
 type Health = { databaseId:number; databaseName:string; serverName:string; databaseStatus:string; recoveryModel:string; lastSeenAtUtc:string; healthStatus:string };
@@ -231,12 +232,12 @@ function AuditViewWithScopedRefresh() {
   return <AuditView key={refreshKey} />;
 }
 
-export default function App() {
+export default function App({ themeMode, onToggleTheme }: { themeMode: 'dark' | 'light'; onToggleTheme: () => void }) {
   const requestedView = new URLSearchParams(window.location.search).get('view');
-  const [view, setView] = useState<'dashboard'|'estate'|'server'|'database'|'audit'|'performance'|'operations'|'protection'|'capacity'|'insights'>(requestedView === 'audit' ? 'audit' : requestedView === 'performance' ? 'performance' : requestedView === 'operations' ? 'operations' : requestedView === 'protection' ? 'protection' : requestedView === 'capacity' ? 'capacity' : requestedView === 'insights' ? 'insights' : 'dashboard');
+  const [view, setView] = useState<'dashboard'|'estate'|'server'|'database'|'audit'|'performance'|'operations'|'protection'|'capacity'|'insights'|'settings'>(requestedView === 'audit' ? 'audit' : requestedView === 'performance' ? 'performance' : requestedView === 'operations' ? 'operations' : requestedView === 'protection' ? 'protection' : requestedView === 'capacity' ? 'capacity' : requestedView === 'insights' ? 'insights' : requestedView === 'settings' ? 'settings' : 'dashboard');
   const [id, setId] = useState(0);
   const openDatabase = (x:number) => { setId(x); setView('database'); };
   const openServer = (x:number) => { setId(x); setView('server'); };
   const navigate = (next: string) => setView((next === 'collections' ? 'dashboard' : next) as typeof view);
-  return <AppShell activeView={view} onNavigate={navigate} onServerSelect={openServer}>{view === 'dashboard' && <ManagementDashboard onDatabase={openDatabase} onServer={openServer} />} {view === 'estate' && <Estate onDatabase={openDatabase} />} {view === 'server' && <ServerDetailView id={id} back={() => setView('estate')} onDatabase={openDatabase} />} {view === 'database' && <DatabaseDetailView id={id} back={() => setView('estate')} />} {view === 'protection' && <ProtectionView />} {view === 'capacity' && <CapacityView />} {view === 'performance' && <PerformanceView />} {view === 'operations' && <OperationsView />} {view === 'insights' && <InsightsView />} {view === 'audit' && <AuditViewWithScopedRefresh />}</AppShell>;
+  return <AppShell activeView={view} onNavigate={navigate} onServerSelect={openServer} themeMode={themeMode} onToggleTheme={onToggleTheme}>{view === 'dashboard' && <ManagementDashboard onDatabase={openDatabase} onServer={openServer} />} {view === 'estate' && <Estate onDatabase={openDatabase} />} {view === 'server' && <ServerDetailView id={id} back={() => setView('estate')} onDatabase={openDatabase} />} {view === 'database' && <DatabaseDetailView id={id} back={() => setView('estate')} />} {view === 'protection' && <ProtectionView />} {view === 'capacity' && <CapacityView />} {view === 'performance' && <PerformanceView />} {view === 'operations' && <OperationsView />} {view === 'insights' && <InsightsView />} {view === 'audit' && <AuditViewWithScopedRefresh />} {view === 'settings' && <SettingsView />}</AppShell>;
 }
