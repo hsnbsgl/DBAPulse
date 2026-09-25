@@ -91,7 +91,7 @@ export default function ListToolbar({ filename, rows, pageSize, onPageSizeChange
     if (value) exportRows(filename, rows, value);
   };
   return <Stack direction="row" spacing={1} alignItems="center" justifyContent="flex-end" flexWrap="wrap" useFlexGap sx={{ my: 1 }}>
-    {showPageSize && pageSize != null && onPageSizeChange && <><Typography variant="caption" color="text.secondary">Kayıt</Typography><Select size="small" value={pageSize} onChange={event => onPageSizeChange(Number(event.target.value))}>{[10, 20, 30, 40, 50].map(size => <MenuItem key={size} value={size}>{size}</MenuItem>)}<MenuItem value={ALL_RECORDS}>All records</MenuItem></Select></>}
+    {showPageSize && pageSize != null && onPageSizeChange && <><Typography variant="caption" color="text.secondary">Records</Typography><Select size="small" value={pageSize} onChange={event => onPageSizeChange(Number(event.target.value))}>{[10, 20, 30, 40, 50].map(size => <MenuItem key={size} value={size}>{size}</MenuItem>)}<MenuItem value={ALL_RECORDS}>All records</MenuItem></Select></>}
     <Select size="small" displayEmpty value={format} onChange={event => handleExport(event.target.value as ExportFormat)} renderValue={value => value ? String(value).toUpperCase() : 'Export'}><MenuItem value="" disabled>Export format</MenuItem><MenuItem value="xlsx">Excel</MenuItem><MenuItem value="csv">CSV</MenuItem><MenuItem value="txt">TXT</MenuItem><MenuItem value="pdf">PDF</MenuItem></Select>
     <Tooltip title="Refresh"><IconButton size="small" aria-label="Refresh" onClick={() => onRefresh?.() ?? refreshHandlers.get(filename)?.()}><RefreshIcon fontSize="small" /></IconButton></Tooltip>
   </Stack>;

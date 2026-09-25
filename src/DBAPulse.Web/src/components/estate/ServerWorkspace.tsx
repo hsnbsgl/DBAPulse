@@ -13,7 +13,7 @@ const get = async <T,>(path: string): Promise<T> => {
   if (!response.ok) throw new Error(`API request failed (${response.status})`);
   return response.json();
 };
-const date = (value?: string | null) => value ? new Intl.DateTimeFormat('tr-TR', { timeZone: tz, dateStyle: 'short', timeStyle: 'medium' }).format(new Date(value)) : 'N/A';
+const date = (value?: string | null) => value ? new Intl.DateTimeFormat('en-GB', { timeZone: tz, dateStyle: 'short', timeStyle: 'medium' }).format(new Date(value)) : 'N/A';
 const mb = (value?: number | null) => value == null ? 'N/A' : `${value.toLocaleString('en-US', { maximumFractionDigits: 1 })} MB`;
 const bytes = (value?: number | null) => {
   if (value == null) return 'N/A';
@@ -65,7 +65,7 @@ const chartPageSize = 10;
 function ChartPager({ page, total, onChange }: { page: number; total: number; onChange: (page: number) => void }) {
   const pageCount = Math.max(1, Math.ceil(total / chartPageSize));
   if (pageCount <= 1) return null;
-  return <Stack direction="row" spacing={1} alignItems="center" sx={{ mt: 1 }}><Typography variant="caption" color="text.secondary">{total} kayıt · Sayfa {page} / {pageCount}</Typography><Box sx={{ flex: 1 }} /><Button size="small" disabled={page <= 1} onClick={() => onChange(page - 1)}>Önceki</Button><Button size="small" disabled={page >= pageCount} onClick={() => onChange(page + 1)}>Sonraki</Button></Stack>;
+  return <Stack direction="row" spacing={1} alignItems="center" sx={{ mt: 1 }}><Typography variant="caption" color="text.secondary">{total} records · Page {page} / {pageCount}</Typography><Box sx={{ flex: 1 }} /><Button size="small" disabled={page <= 1} onClick={() => onChange(page - 1)}>Previous</Button><Button size="small" disabled={page >= pageCount} onClick={() => onChange(page + 1)}>Next</Button></Stack>;
 }
 
 type ResizeDirection = 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw';
