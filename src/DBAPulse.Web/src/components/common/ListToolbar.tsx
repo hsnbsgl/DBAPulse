@@ -1,9 +1,20 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { IconButton, MenuItem, Select, Stack, Tooltip, Typography } from '@mui/material';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import * as XLSX from 'xlsx';
 
 export const ALL_RECORDS = -1;
+
+const refreshHandlers = new Map<string, () => void>();
+
+export function useListRefresh(filename: string, handler: () => void) {
+  useEffect(() => {
+    refreshHandlers.set(filename, handler);
+    return () => {
+      if (refreshHandlers.get(filename) === handler) refreshHandlers.delete(filename);
+    };
+  }, [filename, handler]);
+}
 
 type ExportFormat = '' | 'xlsx' | 'csv' | 'txt' | 'pdf';
 
@@ -73,7 +84,7 @@ export const exportRows = (filename: string, rows: unknown[], format: Exclude<Ex
   download(`${filename}.pdf`, createPdf(rows), 'application/pdf');
 };
 
-export default function ListToolbar({ filename, rows, pageSize, onPageSizeChange, onRefresh = () => window.location.reload(), showPageSize = true }: { filename: string; rows: unknown[]; pageSize?: number; onPageSizeChange?: (size: number) => void; onRefresh?: () => void; showPageSize?: boolean }) {
+export default function ListToolbar({ filename, rows, pageSize, onPageSizeChange, onRefresh, showPageSize = true }: { filename: string; rows: unknown[]; pageSize?: number; onPageSizeChange?: (size: number) => void; onRefresh?: () => void; showPageSize?: boolean }) {
   const [format, setFormat] = useState<ExportFormat>('');
   const handleExport = (value: ExportFormat) => {
     setFormat('');
@@ -82,6 +93,6 @@ export default function ListToolbar({ filename, rows, pageSize, onPageSizeChange
   return <Stack direction="row" spacing={1} alignItems="center" justifyContent="flex-end" flexWrap="wrap" useFlexGap sx={{ my: 1 }}>
     {showPageSize && pageSize != null && onPageSizeChange && <><Typography variant="caption" color="text.secondary">Kayıt</Typography><Select size="small" value={pageSize} onChange={event => onPageSizeChange(Number(event.target.value))}>{[10, 20, 30, 40, 50].map(size => <MenuItem key={size} value={size}>{size}</MenuItem>)}<MenuItem value={ALL_RECORDS}>All records</MenuItem></Select></>}
     <Select size="small" displayEmpty value={format} onChange={event => handleExport(event.target.value as ExportFormat)} renderValue={value => value ? String(value).toUpperCase() : 'Export'}><MenuItem value="" disabled>Export format</MenuItem><MenuItem value="xlsx">Excel</MenuItem><MenuItem value="csv">CSV</MenuItem><MenuItem value="txt">TXT</MenuItem><MenuItem value="pdf">PDF</MenuItem></Select>
-    <Tooltip title="Refresh"><IconButton size="small" aria-label="Refresh" onClick={onRefresh}><RefreshIcon fontSize="small" /></IconButton></Tooltip>
+    <Tooltip title="Refresh"><IconButton size="small" aria-label="Refresh" onClick={() => onRefresh?.() ?? refreshHandlers.get(filename)?.()}><RefreshIcon fontSize="small" /></IconButton></Tooltip>
   </Stack>;
 }

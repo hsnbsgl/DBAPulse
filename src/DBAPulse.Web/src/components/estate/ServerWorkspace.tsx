@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import { Alert, Box, Button, Chip, Divider, Paper, Stack, Tab, Table, TableBody, TableCell, TableHead, TableRow, TableSortLabel, Tabs, Typography } from '@mui/material';
 import { KpiCard, EmptyState, StatusChip } from '../common/Ui';
-import ListToolbar, { ALL_RECORDS } from '../common/ListToolbar';
+import ListToolbar, { ALL_RECORDS, useListRefresh } from '../common/ListToolbar';
 import DonutChart from '../charts/DonutChart';
 import HorizontalBarChart from '../charts/HorizontalBarChart';
 import { chartColors } from '../charts/chartTheme';
@@ -335,6 +335,84 @@ export default function ServerWorkspace({ serverId, onDatabase, onBack, fullPage
     }).catch(errorValue => { if (!cancelled) setError(errorValue.message); });
     return () => { cancelled = true; };
   }, [serverId]);
+
+  type ServerListKey = 'server-databases' | 'server-blocking' | 'server-deadlocks' | 'server-long-running' | 'server-backups' | 'server-always-on' | 'server-jobs' | 'server-capacity-databases' | 'server-capacity-volumes' | 'server-operational-events' | 'server-anomalies';
+  const refreshServerList = async (key: ServerListKey) => {
+    if (!data) return;
+    try {
+      const serverName = data.server.server.serverName;
+      switch (key) {
+        case 'server-databases': {
+          const server = await get<ServerDetail>(`/servers/${serverId}`);
+          setData(current => current ? { ...current, server } : current);
+          break;
+        }
+        case 'server-capacity-databases': {
+          const capacity = await get<Page<CapacityDb>>(`/capacity/databases?serverId=${serverId}&page=1&pageSize=100`);
+          setData(current => current ? { ...current, capacity } : current);
+          break;
+        }
+        case 'server-capacity-volumes': {
+          const volumes = await get<Page<Volume>>(`/capacity/volumes?serverId=${serverId}&page=1&pageSize=100`);
+          setData(current => current ? { ...current, volumes } : current);
+          break;
+        }
+        case 'server-backups': {
+          const backups = await get<Page<Backup>>(`/protection/backups?serverId=${serverId}&page=1&pageSize=100`);
+          setData(current => current ? { ...current, backups } : current);
+          break;
+        }
+        case 'server-always-on': {
+          const alwaysOn = await get<Page<AlwaysOn>>(`/availability/alwayson?serverId=${serverId}&page=1&pageSize=100`);
+          setData(current => current ? { ...current, alwaysOn } : current);
+          break;
+        }
+        case 'server-jobs': {
+          const jobs = await get<Page<Job>>(`/jobs?serverId=${serverId}&page=1&pageSize=100`);
+          setData(current => current ? { ...current, jobs } : current);
+          break;
+        }
+        case 'server-operational-events': {
+          const operations = await get<Page<OperationalEvent>>(`/operations/events?serverId=${serverId}&page=1&pageSize=100`);
+          setData(current => current ? { ...current, operations } : current);
+          break;
+        }
+        case 'server-anomalies': {
+          const anomalies = await get<Page<Anomaly>>(`/anomalies?serverId=${serverId}&page=1&pageSize=100`);
+          setData(current => current ? { ...current, anomalies } : current);
+          break;
+        }
+        case 'server-blocking': {
+          const blocking = await get<Blocking[]>('/performance/blocking?hours=24');
+          setData(current => current ? { ...current, blocking: blocking.filter(row => row.serverName === serverName) } : current);
+          break;
+        }
+        case 'server-deadlocks': {
+          const deadlocks = await get<Deadlock[]>('/performance/deadlocks?hours=24');
+          setData(current => current ? { ...current, deadlocks: deadlocks.filter(row => row.serverName === serverName) } : current);
+          break;
+        }
+        case 'server-long-running': {
+          const longRunning = await get<LongRunning[]>('/performance/long-running?hours=24');
+          setData(current => current ? { ...current, longRunning: longRunning.filter(row => row.serverName === serverName) } : current);
+          break;
+        }
+      }
+    } catch (errorValue) {
+      setError(errorValue instanceof Error ? errorValue.message : String(errorValue));
+    }
+  };
+  useListRefresh('server-databases', () => { void refreshServerList('server-databases'); });
+  useListRefresh('server-blocking', () => { void refreshServerList('server-blocking'); });
+  useListRefresh('server-deadlocks', () => { void refreshServerList('server-deadlocks'); });
+  useListRefresh('server-long-running', () => { void refreshServerList('server-long-running'); });
+  useListRefresh('server-backups', () => { void refreshServerList('server-backups'); });
+  useListRefresh('server-always-on', () => { void refreshServerList('server-always-on'); });
+  useListRefresh('server-jobs', () => { void refreshServerList('server-jobs'); });
+  useListRefresh('server-capacity-databases', () => { void refreshServerList('server-capacity-databases'); });
+  useListRefresh('server-capacity-volumes', () => { void refreshServerList('server-capacity-volumes'); });
+  useListRefresh('server-operational-events', () => { void refreshServerList('server-operational-events'); });
+  useListRefresh('server-anomalies', () => { void refreshServerList('server-anomalies'); });
 
   if (error) return <Alert severity="error">Unable to load server data: {error}</Alert>;
   if (!data) return <Typography color="text.secondary">Loading server telemetry…</Typography>;
