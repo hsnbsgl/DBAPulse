@@ -38,7 +38,8 @@ public sealed class AuditMiddleware
         finally
         {
             stopwatch.Stop();
-            var entry = new AuditLogEntry(0, DateTimeOffset.UtcNow, "anonymous", "Unauthenticated", action, resourceType, resourceId,
+            var userName = context.User.Identity?.IsAuthenticated == true ? context.User.Identity.Name ?? "authenticated" : "anonymous"; var userRole = context.User.FindFirst(System.Security.Claims.ClaimTypes.Role)?.Value ?? "Unauthenticated";
+            var entry = new AuditLogEntry(0, DateTimeOffset.UtcNow, userName, userRole, action, resourceType, resourceId,
                 context.Request.Method, Limit(context.Request.Path.Value, 512)!, result, statusCode, stopwatch.ElapsedMilliseconds, correlationId,
                 Limit(context.Connection.RemoteIpAddress?.ToString(), 128), Limit(context.Request.Headers.UserAgent.FirstOrDefault(), 512), additionalData);
             try { await _store.InsertAsync(entry, CancellationToken.None); }
@@ -49,11 +50,19 @@ public sealed class AuditMiddleware
     private static bool TryDescribe(HttpContext context, out string action, out string resourceType, out string? resourceId, out string? additionalData)
     {
         action = string.Empty; resourceType = string.Empty; resourceId = null; additionalData = null;
-        if (!HttpMethods.IsGet(context.Request.Method)) return false;
         var path = context.Request.Path.Value ?? string.Empty;
+        if (!HttpMethods.IsGet(context.Request.Method) && !path.StartsWith("/api/settings", StringComparison.OrdinalIgnoreCase)) return false;
         if (path.Equals("/api/health", StringComparison.OrdinalIgnoreCase)) return false;
         var parts = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
         if (parts.Length < 2 || !parts[0].Equals("api", StringComparison.OrdinalIgnoreCase)) return false;
+        if (parts[1].Equals("settings", StringComparison.OrdinalIgnoreCase))
+        {
+            resourceType = "Settings";
+            var scope = parts.Length >= 3 ? parts[2].ToLowerInvariant() : "general";
+            resourceId = scope == "servers" && parts.Length >= 4 ? Numeric(parts[3]) : null;
+            action = HttpMethods.IsGet(context.Request.Method) ? $"Settings.{scope}.View" : context.Request.Method == HttpMethods.Post ? $"Settings.{scope}.Test" : $"Settings.{scope}.Update";
+            return true;
+        }
         if (parts[1].Equals("management", StringComparison.OrdinalIgnoreCase)) { resourceType="Management"; action=parts.Length>=3 ? parts[2].Equals("attention",StringComparison.OrdinalIgnoreCase) ? "Management.Attention.View" : parts[2].Equals("health",StringComparison.OrdinalIgnoreCase) ? "Management.Health.View" : parts[2].Equals("changes",StringComparison.OrdinalIgnoreCase) ? "Management.Changes.View" : parts[2].Equals("correlations",StringComparison.OrdinalIgnoreCase) ? (parts.Length>=4 ? "Management.Correlation.Detail" : "Management.Correlation.List") : "Management.View" : "Management.View"; return true; }
         if (parts[1].Equals("dashboard", StringComparison.OrdinalIgnoreCase) && parts.Length >= 3) { action = "Dashboard.View"; resourceType = "Dashboard"; return true; }
         if (parts[1].Equals("performance", StringComparison.OrdinalIgnoreCase) && parts.Length >= 3)

@@ -34,12 +34,14 @@ services:
       - "host.docker.internal:host-gateway"
     environment:
       DBAPULSE_API_CONNECTION: ${DBAPULSE_API_CONNECTION}
+      DBAPULSE_ADMIN_USERNAME: ${DBAPULSE_ADMIN_USERNAME:-admin}
+      DBAPULSE_ADMIN_PASSWORD_FILE: /run/secrets/dbapulse-admin-password
       DBAPULSE_DISPLAY_TIMEZONE: ${DBAPULSE_DISPLAY_TIMEZONE:-Europe/Istanbul}
-      DBAPULSE_AI_PROVIDER: ${DBAPULSE_AI_PROVIDER:-none}
-      DBAPULSE_AI_MODEL: ${DBAPULSE_AI_MODEL:-gpt-5}
-      DBAPULSE_AI_BASE_URL: ${DBAPULSE_AI_BASE_URL:-https://api.openai.com}
-      DBAPULSE_AI_PROTOCOL: ${DBAPULSE_AI_PROTOCOL:-responses}
-      DBAPULSE_AI_API_KEY: ${DBAPULSE_AI_API_KEY:-}
+      DBAPULSE_AI_PROVIDER: ${DBAPULSE_AI_PROVIDER:-onprem}
+      DBAPULSE_AI_MODEL: ${DBAPULSE_AI_MODEL:-qwen2.5-coder:3b}
+      DBAPULSE_AI_BASE_URL: ${DBAPULSE_AI_BASE_URL:-http://host.docker.internal:11434/v1}
+      DBAPULSE_AI_PROTOCOL: ${DBAPULSE_AI_PROTOCOL:-chat-completions}
+      DBAPULSE_AI_API_KEY: ${DBAPULSE_AI_API_KEY:-ollama}
       DBAPULSE_SMTP_HOST: ${DBAPULSE_SMTP_HOST:-}
       DBAPULSE_SMTP_PORT: ${DBAPULSE_SMTP_PORT:-587}
       DBAPULSE_SMTP_SECURITY: ${DBAPULSE_SMTP_SECURITY:-starttls}
@@ -57,6 +59,8 @@ services:
       DBAPULSE_AD_ENABLED: ${DBAPULSE_AD_ENABLED:-false}
     expose:
       - "8080"
+    volumes:
+      - ./.secrets/dbapulse-admin-password:/run/secrets/dbapulse-admin-password:ro,Z
   dbapulse-web:
     build:
       context: ./src/DBAPulse.Web
@@ -68,3 +72,6 @@ services:
       - dbapulse-api
     ports:
       - "8088:80"
+      - "${DBAPULSE_WEB_HTTPS_PORT:-8443}:443"
+    volumes:
+      - ./certs:/etc/nginx/certs:ro,Z

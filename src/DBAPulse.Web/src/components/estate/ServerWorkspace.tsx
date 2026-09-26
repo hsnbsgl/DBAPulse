@@ -203,12 +203,44 @@ function ServerSummary({ data }: { data: WorkspaceData }) {
   </Stack>;
 }
 
+function AiSummaryContent({ text, streaming }: { text: string; streaming: boolean }) {
+  const lines = text.replace(/\r\n/g, '\n').split('\n');
+  return <Box className="ai-summary-content">{lines.map((line, index) => {
+    const value = line.trim();
+    if (!value) return <Box key={`space-${index}`} className="ai-summary-spacer" />;
+    const heading = value.replace(/^#{1,3}\s*/, '').replace(/:$/, '').trim();
+    if (/^(Genel Durum|Riskler|Önerilen Aksiyonlar)$/i.test(heading)) return <Typography key={index} className="ai-summary-heading" variant="subtitle1">{heading}</Typography>;
+    if (/^[-*•]\s+/.test(value)) return <Typography key={index} className="ai-summary-line ai-summary-bullet">{value.replace(/^[-*•]\s+/, '')}</Typography>;
+    if (/^\d+[.)]\s+/.test(value)) return <Typography key={index} className="ai-summary-line ai-summary-number">{value}</Typography>;
+    return <Typography key={index} className="ai-summary-line">{value}</Typography>;
+  })}{streaming && <Typography component="span" className="ai-summary-cursor">▌</Typography>}</Box>;
+}
+
 function AiSummaryTab({ serverId }: { serverId: number }) {
   const [loading, setLoading] = useState(true); const [summary, setSummary] = useState(''); const [error, setError] = useState('');
-  useEffect(() => { let cancelled = false; setLoading(true); fetch(`${api}/servers/${serverId}/ai-summary`, { method: 'POST' }).then(async response => { const value = await response.json(); if (cancelled) return; if (!value.configured || value.error) setError(value.error || 'AI provider is not configured.'); else setSummary(value.summary); }).catch(() => !cancelled && setError('AI provider could not be reached.')).finally(() => !cancelled && setLoading(false)); return () => { cancelled = true; }; }, [serverId]);
-  return <Paper className="panel ai-summary-panel"><Stack spacing={1.5}><Typography variant="h6">AI Summary</Typography><Typography variant="body2" color="text.secondary">Generated from the latest collected server and health data.</Typography>{loading ? <Typography color="text.secondary">Generating summary…</Typography> : error ? <Alert severity="info">{error} <a href="?view=settings">Open Settings</a></Alert> : <Typography className="ai-summary-text">{summary}</Typography>}</Stack></Paper>;
-}
-function DatabasesTab({ data, onDatabase }: { data: WorkspaceData; onDatabase: (id: number) => void }) {
+  useEffect(() => {
+    const controller = new AbortController(); let cancelled = false;
+    const readStream = async () => {
+      setLoading(true); setSummary(''); setError('');
+      try {
+        const response = await fetch(`${api}/servers/${serverId}/ai-summary/stream`, { method: 'POST', signal: controller.signal });
+        if (!response.ok || !response.body) throw new Error('AI provider could not be reached.');
+        const reader = response.body.getReader(); const decoder = new TextDecoder(); let buffer = '';
+        const consume = (block: string) => {
+          let event = 'message'; let data = '';
+          block.split(/\r?\n/).forEach(line => { if (line.startsWith('event:')) event = line.slice(6).trim(); else if (line.startsWith('data:')) data += line.slice(5).trim(); });
+          if (!data || cancelled) return; let value = ''; try { value = JSON.parse(data); } catch { value = data; }
+          if (event === 'token') setSummary(current => (current + value).slice(0, 1000)); else if (event === 'error') setError(value || 'AI provider could not be reached.');
+        };
+        while (true) { const result = await reader.read(); if (result.done) break; buffer += decoder.decode(result.value, { stream: true }); const blocks = buffer.split(/\r?\n\r?\n/); buffer = blocks.pop() || ''; blocks.forEach(consume); }
+        if (buffer) consume(buffer);
+      } catch (exception) { if (!cancelled && (exception as Error).name !== 'AbortError') setError((exception as Error).message || 'AI provider could not be reached.'); }
+      finally { if (!cancelled) setLoading(false); }
+    };
+    void readStream(); return () => { cancelled = true; controller.abort(); };
+  }, [serverId]);
+  return <Paper className="panel ai-summary-panel"><Stack spacing={1.5}><Typography variant="h6">AI Summary</Typography><Typography variant="body2" color="text.secondary">Generated from the latest collected server and health data.</Typography>{error ? <Alert severity="info">{error} <a href="?view=settings">Open Settings</a></Alert> : summary ? <AiSummaryContent text={summary} streaming={loading} /> : <Typography color="text.secondary">Generating summary…</Typography>}</Stack></Paper>;
+}function DatabasesTab({ data, onDatabase }: { data: WorkspaceData; onDatabase: (id: number) => void }) {
   const capacityByDatabase = useMemo(() => new Map(data.capacity.items.map(x => [x.databaseId, x])), [data.capacity.items]);
   const chartRows = data.capacity.items.filter(x => Number.isFinite(x.currentTotalSizeMb)).sort((left, right) => right.currentTotalSizeMb - left.currentTotalSizeMb);
   const [sort, setSort] = useState<SortState>({ key: 'databaseName', direction: 'asc' });

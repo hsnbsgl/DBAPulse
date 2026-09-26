@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { Alert, Box, Button, Chip, CircularProgress, Divider, IconButton, List, ListItemButton, ListItemText, MenuItem, Paper, Select, Stack, Table, TableBody, TableCell, TableHead, TableRow, TextField, Typography } from '@mui/material';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import AddIcon from '@mui/icons-material/Add';
@@ -232,10 +232,29 @@ function AuditViewWithScopedRefresh() {
   return <AuditView key={refreshKey} />;
 }
 
+function LoginView({ onAuthenticated }: { onAuthenticated: () => void }) {
+  const [username, setUsername] = useState('admin');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+  const submit = async (event: FormEvent) => {
+    event.preventDefault(); setLoading(true); setError('');
+    try {
+      const response = await fetch(api + '/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password }) });
+      if (!response.ok) { setError('Username or password is incorrect.'); return; }
+      setPassword(''); onAuthenticated();
+    } catch { setError('Authentication service could not be reached.'); } finally { setLoading(false); }
+  };
+  return <Box sx={{ minHeight: '100vh', display: 'grid', placeItems: 'center', p: 2 }}><Paper className="panel" sx={{ width: '100%', maxWidth: 420, p: 3 }}><Stack component="form" onSubmit={submit} spacing={2}><Typography variant="h4">DBA Pulse</Typography><Typography color="text.secondary">Sign in to access the monitoring console.</Typography>{error && <Alert severity="error">{error}</Alert>}<TextField label="Username" value={username} onChange={e => setUsername(e.target.value)} autoComplete="username" required /><TextField label="Password" type="password" value={password} onChange={e => setPassword(e.target.value)} autoComplete="current-password" required /><Button type="submit" variant="contained" disabled={loading}>{loading ? 'Signing in…' : 'Sign in'}</Button></Stack></Paper></Box>;
+}
 export default function App({ themeMode, onToggleTheme }: { themeMode: 'dark' | 'light'; onToggleTheme: () => void }) {
   const requestedView = new URLSearchParams(window.location.search).get('view');
   const [view, setView] = useState<'dashboard'|'estate'|'server'|'database'|'audit'|'performance'|'operations'|'protection'|'capacity'|'insights'|'settings'>(requestedView === 'audit' ? 'audit' : requestedView === 'performance' ? 'performance' : requestedView === 'operations' ? 'operations' : requestedView === 'protection' ? 'protection' : requestedView === 'capacity' ? 'capacity' : requestedView === 'insights' ? 'insights' : requestedView === 'settings' ? 'settings' : 'dashboard');
   const [id, setId] = useState(0);
+  const [authenticated, setAuthenticated] = useState<boolean | null>(null);
+  useEffect(() => { fetch(api + '/auth/me').then(response => response.ok ? response.json() : { authenticated: false }).then(value => setAuthenticated(Boolean(value.authenticated))).catch(() => setAuthenticated(false)); }, []);
+  if (authenticated === null) return <Box sx={{ minHeight: '100vh', display: 'grid', placeItems: 'center' }}><CircularProgress /></Box>;
+  if (!authenticated) return <LoginView onAuthenticated={() => setAuthenticated(true)} />;
   const openDatabase = (x:number) => { setId(x); setView('database'); };
   const openServer = (x:number) => { setId(x); setView('server'); };
   const navigate = (next: string) => setView((next === 'collections' ? 'dashboard' : next) as typeof view);

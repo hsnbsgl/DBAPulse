@@ -1,0 +1,13 @@
+services:
+  hammerdb:
+    image: tpcorg/hammerdb:mssqls
+    container_name: dbapulse-hammerdb
+    network_mode: "container:sqlserver2025"
+    environment:
+      MSSQL_PASSWORD: ${MSSQL_PASSWORD:?MSSQL_PASSWORD must be supplied at runtime}
+      TMP: /tmp
+    working_dir: /work
+    volumes:
+      - ./scripts:/work:ro
+      - ./results:/results
+    entrypoint: ["/home/HammerDB-6.0/hammerdbcli", "auto", "/work/build-tpcc.tcl"]

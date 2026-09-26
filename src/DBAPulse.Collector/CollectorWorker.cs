@@ -14,8 +14,9 @@ public sealed class CollectorWorker : BackgroundService
     private readonly ILogger<CollectorWorker> _logger;
     private readonly string _timeZone;
     private readonly TimeSpan _interval;
-    private readonly TimeSpan _capacityInterval;
+    private TimeSpan _capacityInterval;
     private DateTime _lastCapacityCollectedAtUtc = DateTime.MinValue;
+    private readonly Dictionary<int, DateTime> _lastServerCollectedAtUtc = new();
     private readonly bool _runOnce;
     private readonly long _longRunningThresholdMs;
     private readonly IHostApplicationLifetime _lifetime;
@@ -28,7 +29,7 @@ public sealed class CollectorWorker : BackgroundService
     {
         _source = source; _store = store; _logger = logger;
         _timeZone = configuration["DBAPULSE_DISPLAY_TIMEZONE"] ?? "Europe/Istanbul";
-        _interval = TimeSpan.FromMinutes(Math.Max(1, int.TryParse(configuration["DBAPULSE_COLLECTION_INTERVAL_MINUTES"], out var minutes) ? minutes : 5));
+        _interval = TimeSpan.FromMinutes(1);
         _capacityInterval = TimeSpan.FromMinutes(Math.Max(1, int.TryParse(configuration["DBAPULSE_CAPACITY_INTERVAL_MINUTES"], out var capacityMinutes) ? capacityMinutes : 60));
         _runOnce = string.Equals(configuration["DBAPULSE_RUN_ONCE"], "true", StringComparison.OrdinalIgnoreCase);
         var longRunningSeconds = int.TryParse(configuration["DBAPULSE_LONG_RUNNING_SECONDS"], out var configuredSeconds) ? configuredSeconds : 60;
@@ -65,6 +66,32 @@ public sealed class CollectorWorker : BackgroundService
             var serverInputs = servers.Select(s => new ServerInput(s.ServerName, s.InstanceName, s.SqlVersion, s.Edition, _timeZone, DateTimeOffset.UtcNow, true)).ToArray();
             var serverIds = await _store.SyncServersAsync(serverInputs, token);
             _logger.LogInformation("Servers sync OK - {Count} rows", serverIds.Count);
+            var activeServers = new List<ServerInventory>();
+            foreach (var server in servers)
+            {
+                if (serverIds.TryGetValue(server.ServerName, out var id) && await _store.IsServerActiveAsync(id, token)) activeServers.Add(server);
+                else _logger.LogInformation("Skipping inactive server {ServerName}", server.ServerName);
+            }
+            if (activeServers.Count == 0)
+            {
+                stopwatch.Stop();
+                await _store.CompleteRunAsync(runId, "Skipped", DateTime.UtcNow, stopwatch.ElapsedMilliseconds, token);
+                _logger.LogInformation("Collection #{RunId} skipped because all discovered servers are inactive", runId);
+                return;
+            }
+            servers = activeServers;
+            var primaryServerId = serverIds[servers[0].ServerName];
+            var serverIntervals = await _store.GetServerIntervalsAsync(primaryServerId, token);
+            var nowUtc = DateTime.UtcNow;
+            if (_lastServerCollectedAtUtc.TryGetValue(primaryServerId, out var lastCollectedAtUtc) && nowUtc - lastCollectedAtUtc < TimeSpan.FromMinutes(serverIntervals.CollectionIntervalMinutes))
+            {
+                stopwatch.Stop();
+                await _store.CompleteRunAsync(runId, "Skipped", nowUtc, stopwatch.ElapsedMilliseconds, token);
+                _logger.LogInformation("Collection #{RunId} skipped for server {ServerId}; interval is {IntervalMinutes} minutes", runId, primaryServerId, serverIntervals.CollectionIntervalMinutes);
+                return;
+            }
+            _lastServerCollectedAtUtc[primaryServerId] = nowUtc;
+            _capacityInterval = TimeSpan.FromMinutes(serverIntervals.CapacityIntervalMinutes);
 
             var serverSnapshot = Table(("CollectionRunId", typeof(long)), ("ServerId", typeof(int)), ("CollectedAtUtc", typeof(DateTime)), ("UptimeSeconds", typeof(long)));
             foreach (var server in servers.Where(s => serverIds.ContainsKey(s.ServerName))) serverSnapshot.Rows.Add(runId, serverIds[server.ServerName], DateTime.UtcNow, Db(server.UptimeSeconds));

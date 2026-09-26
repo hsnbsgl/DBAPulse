@@ -21,7 +21,7 @@ const nav: NavItem[] = [
   { key: 'performance', label: 'Performance', icon: <SpeedIcon /> },
   { key: 'operations', label: 'Blocking & Deadlocks', icon: <CrisisAlertIcon /> },
   { key: 'insights', label: 'Anomalies', icon: <CrisisAlertIcon /> },
-  { key: 'capacity', label: 'FinOps & Capacity', icon: <StorageIcon /> },
+  { key: 'capacity', label: 'Capacity', icon: <StorageIcon /> },
   { key: 'audit', label: 'Audit Trail', icon: <FactCheckIcon /> },
   { key: 'settings', label: 'Settings', icon: <SettingsIcon /> },
 ];

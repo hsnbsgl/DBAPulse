@@ -49,6 +49,23 @@ public sealed class ManagementStore
         return await SyncMapAsync("dbo.usp_Servers_Sync", "dbo.ServerInputType", table, "ServerName", token);
     }
 
+    public async Task<(int CollectionIntervalMinutes, int CapacityIntervalMinutes)> GetServerIntervalsAsync(int serverId, CancellationToken token)
+    {
+        await using var connection = await OpenAsync(token);
+        await using var command = new SqlCommand("SELECT CollectionIntervalMinutes,CapacityIntervalMinutes FROM dbo.Servers WHERE Id=@ServerId", connection);
+        command.Parameters.AddWithValue("@ServerId", serverId);
+        await using var reader = await command.ExecuteReaderAsync(token);
+        return await reader.ReadAsync(token) ? (reader.GetInt32(0), reader.GetInt32(1)) : (5, 60);
+    }
+    public async Task<bool> IsServerActiveAsync(int serverId, CancellationToken token)
+    {
+        await using var connection = await OpenAsync(token);
+        await using var command = new SqlCommand("SELECT IsActive FROM dbo.Servers WHERE Id=@ServerId", connection);
+        command.Parameters.AddWithValue("@ServerId", serverId);
+        var value = await command.ExecuteScalarAsync(token);
+        return value is not null && value is not DBNull && Convert.ToBoolean(value);
+    }
+
     public async Task<Dictionary<string, int>> SyncDatabasesAsync(IReadOnlyCollection<DatabaseInput> rows, CancellationToken token)
     {
         var table = new DataTable();
