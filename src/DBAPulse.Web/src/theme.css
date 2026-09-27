@@ -28,3 +28,5 @@
 .tskb-logo{background:#fff;border-radius:4px;padding:3px 5px;box-sizing:border-box}.tskb-logo-image{background:#fff}
 /* AI Summary readability. */
 .ai-summary-content{padding:16px 18px;background:rgba(99,164,255,.05);border:1px solid rgba(99,164,255,.18);border-radius:8px;line-height:1.65}.ai-summary-heading{margin:14px 0 6px!important;font-weight:750!important;color:#72abff}.ai-summary-heading:first-child{margin-top:0!important}.ai-summary-line{display:block;white-space:pre-wrap}.ai-summary-bullet{position:relative;padding-left:20px}.ai-summary-bullet:before{content:'•';position:absolute;left:4px;color:#f08a24;font-weight:700}.ai-summary-number{padding-left:4px}.ai-summary-spacer{height:6px}.ai-summary-cursor{color:#f08a24;animation:ai-summary-blink 1s step-end infinite}@keyframes ai-summary-blink{50%{opacity:0}}:root[data-theme='light'] .ai-summary-content{background:rgba(44,99,139,.08);border-color:#a9c3d2}:root[data-theme='light'] .ai-summary-heading{color:#1f638f}
+/* Slightly denser typography scale. */
+html{font-size:15px}

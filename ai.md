@@ -16,6 +16,19 @@ Ayarlar web arayüzünde `Settings > AI Settings` bölümünden yapılır.
 
 API key uygulama ayarlarında maskeli gösterilir. Gerçek anahtarları Git’e, README’ye veya loglara yazmayın.
 
+## Google Gemini
+
+Gemini native API için Settings ekranında şu değerleri kullanın:
+
+| Alan | Değer |
+|---|---|
+| Provider | `gemini` |
+| Model | `gemini-flash-latest` veya hesabınızda aktif olan model |
+| Base URL | `https://generativelanguage.googleapis.com/v1beta` |
+| Protocol | `gemini` |
+| API Key | Google AI Studio anahtarı |
+
+Uygulama Gemini için `generateContent` ve streaming sırasında `streamGenerateContent?alt=sse` endpointlerini kullanır. API key `Authorization` yerine `X-goog-api-key` header’ında gönderilir. Paylaşılan anahtarları döndürün ve yeni anahtar kullanın.
 ## Local LLM / Ollama
 
 Red Hat kurulumunda `scripts/setup.sh` local LLM seçilirse:

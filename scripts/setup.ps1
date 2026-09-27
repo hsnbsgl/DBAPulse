@@ -114,9 +114,9 @@ New-Item -ItemType Directory -Force '.secrets' | Out-Null
 [IO.File]::WriteAllText((Join-Path (Get-Location) '.secrets\dbapulse-admin-password'), $adminPassword, [Text.UTF8Encoding]::new($false))
 Ensure-Certificate
 
-$aiProvider = if ($installLlm) { 'onprem' } else { 'none' }
-$aiBaseUrl = if ($installLlm) { 'http://host.docker.internal:11434/v1' } else { 'https://api.openai.com' }
-$aiProtocol = if ($installLlm) { 'chat-completions' } else { 'responses' }
+$aiProvider = if ($installLlm) { 'onprem' } else { 'gemini' }
+$aiBaseUrl = if ($installLlm) { 'http://host.docker.internal:11434/v1' } else { 'https://generativelanguage.googleapis.com/v1beta' }
+$aiProtocol = if ($installLlm) { 'chat-completions' } else { 'gemini' }
 $aiApiKey = if ($installLlm) { 'ollama' } else { '' }
 
 $values = [ordered]@{
@@ -126,7 +126,7 @@ $values = [ordered]@{
     DBAPULSE_ADMIN_USERNAME = $adminUser
     DBAPULSE_DISPLAY_TIMEZONE = 'Europe/Istanbul'
     DBAPULSE_AI_PROVIDER = $aiProvider
-    DBAPULSE_AI_MODEL = $(if ($installLlm) { $llmModel } else { 'gpt-5' })
+    DBAPULSE_AI_MODEL = $(if ($installLlm) { $llmModel } else { 'gemini-flash-latest' })
     DBAPULSE_AI_BASE_URL = $aiBaseUrl
     DBAPULSE_AI_PROTOCOL = $aiProtocol
     DBAPULSE_AI_API_KEY = $aiApiKey

@@ -131,10 +131,10 @@ printf '%s' "$admin_password" > .secrets/dbapulse-admin-password
 chmod 600 .secrets/dbapulse-admin-password
 ensure_certificate
 
-ai_provider='none'
-ai_model='gpt-5'
-ai_base_url='https://api.openai.com'
-ai_protocol='responses'
+ai_provider='gemini'
+ai_model='gemini-flash-latest'
+ai_base_url='https://generativelanguage.googleapis.com/v1beta'
+ai_protocol='gemini'
 ai_api_key=''
 if [[ "$install_llm" == true ]]; then
   ai_provider='onprem'

@@ -15,10 +15,10 @@ public sealed class AiSettingsStore
     private readonly object _sync = new();
     private AiSettings _settings;
     public AiSettingsStore(IConfiguration configuration) => _settings = new(
-        configuration["DBAPULSE_AI_PROVIDER"] ?? "none",
-        configuration["DBAPULSE_AI_MODEL"] ?? "gpt-5",
-        configuration["DBAPULSE_AI_BASE_URL"] ?? "https://api.openai.com",
-        configuration["DBAPULSE_AI_PROTOCOL"] ?? "responses",
+        configuration["DBAPULSE_AI_PROVIDER"] ?? "gemini",
+        configuration["DBAPULSE_AI_MODEL"] ?? "gemini-flash-latest",
+        configuration["DBAPULSE_AI_BASE_URL"] ?? "https://generativelanguage.googleapis.com/v1beta",
+        configuration["DBAPULSE_AI_PROTOCOL"] ?? "gemini",
         configuration["DBAPULSE_AI_API_KEY"] ?? string.Empty);
     public AiSettings Current { get { lock (_sync) return _settings; } }
     public void Update(AiSettingsUpdate update)
@@ -53,10 +53,12 @@ public sealed class AiSummaryService
         try
         {
             using var request = new HttpRequestMessage(HttpMethod.Post, Endpoint(settings));
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
-            object payload = string.Equals(settings.Protocol, "chat-completions", StringComparison.OrdinalIgnoreCase)
-                ? new { model = settings.Model, messages = new[] { new { role = "user", content = "Reply with OK." } }, max_tokens = 8 }
-                : new { model = settings.Model, input = "Reply with OK.", store = false };
+            if (IsGemini(settings)) request.Headers.TryAddWithoutValidation("x-goog-api-key", apiKey); else request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+            object payload = IsGemini(settings)
+                ? new { contents = new[] { new { parts = new[] { new { text = "Reply with OK." } } } }, generationConfig = new { maxOutputTokens = 8 } }
+                : string.Equals(settings.Protocol, "chat-completions", StringComparison.OrdinalIgnoreCase)
+                    ? new { model = settings.Model, messages = new[] { new { role = "user", content = "Reply with OK." } }, max_tokens = 8 }
+                    : new { model = settings.Model, input = "Reply with OK.", store = false };
             request.Content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
             using var response = await _http.SendAsync(request, token);
             return response.IsSuccessStatusCode ? (true, "AI provider connection successful.") : ((int)response.StatusCode == 401 ? (false, "The API key was rejected by the provider.") : (false, $"Provider returned HTTP {(int)response.StatusCode}."));
@@ -77,14 +79,18 @@ public sealed class AiSummaryService
         try
         {
             using var request = new HttpRequestMessage(HttpMethod.Post, Endpoint(settings));
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
-            object payload; if (string.Equals(settings.Protocol, "chat-completions", StringComparison.OrdinalIgnoreCase)) payload = new { model = settings.Model, messages = new[] { new { role = "user", content = prompt } }, temperature = 0.2, max_tokens = 256 }; else payload = new { model = settings.Model, input = prompt, store = false, max_output_tokens = 256 };
+            if (IsGemini(settings)) request.Headers.TryAddWithoutValidation("x-goog-api-key", apiKey); else request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+            object payload = IsGemini(settings)
+                ? new { contents = new[] { new { parts = new[] { new { text = prompt } } } }, generationConfig = new { temperature = 0.2, maxOutputTokens = 256 } }
+                : string.Equals(settings.Protocol, "chat-completions", StringComparison.OrdinalIgnoreCase)
+                    ? new { model = settings.Model, messages = new[] { new { role = "user", content = prompt } }, temperature = 0.2, max_tokens = 256 }
+                    : new { model = settings.Model, input = prompt, store = false, max_output_tokens = 256 };
             request.Content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
             using var response = await _http.SendAsync(request, token);
             var body = await response.Content.ReadAsStringAsync(token);
             if (!response.IsSuccessStatusCode) return new(true, settings.Provider, settings.Model, string.Empty, $"AI request failed ({(int)response.StatusCode}).");
             using var json = JsonDocument.Parse(body);
-            var text = json.RootElement.TryGetProperty("output_text", out var output) ? output.GetString() : string.Equals(settings.Protocol, "chat-completions", StringComparison.OrdinalIgnoreCase) ? ExtractChatText(json.RootElement) : ExtractText(json.RootElement);
+            var text = IsGemini(settings) ? ExtractGeminiText(json.RootElement) : json.RootElement.TryGetProperty("output_text", out var output) ? output.GetString() : string.Equals(settings.Protocol, "chat-completions", StringComparison.OrdinalIgnoreCase) ? ExtractChatText(json.RootElement) : ExtractText(json.RootElement);
             return new(true, settings.Provider, settings.Model, LimitSummary(text ?? "AI response did not contain text."), null);
         }
         catch (TaskCanceledException ex) when (!token.IsCancellationRequested) { _logger.LogWarning(ex, "AI summary request timed out for {BaseUrl}", settings.BaseUrl); return new(true, settings.Provider, settings.Model, string.Empty, "AI provider request timed out."); }
@@ -103,11 +109,13 @@ public sealed class AiSummaryService
         var prompt = $"You are a senior SQL Server operations assistant. Summarize the following server for an operator. Use concise Turkish with sections: Genel Durum, Riskler, Önerilen Aksiyonlar. Do not invent facts; explicitly say when data is unavailable. Keep the response under 1000 characters. Server: {JsonSerializer.Serialize(detail.Server)} Databases: {JsonSerializer.Serialize(detail.Databases)} Health signals: {JsonSerializer.Serialize(health)}";
         try
         {
-            using var request = new HttpRequestMessage(HttpMethod.Post, Endpoint(settings));
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
-            object payload = string.Equals(settings.Protocol, "chat-completions", StringComparison.OrdinalIgnoreCase)
-                ? new { model = settings.Model, messages = new[] { new { role = "user", content = prompt } }, temperature = 0.2, stream = true }
-                : new { model = settings.Model, input = prompt, store = false, stream = true };
+            using var request = new HttpRequestMessage(HttpMethod.Post, Endpoint(settings, true));
+            if (IsGemini(settings)) request.Headers.TryAddWithoutValidation("x-goog-api-key", apiKey); else request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+            object payload = IsGemini(settings)
+                ? new { contents = new[] { new { parts = new[] { new { text = prompt } } } }, generationConfig = new { temperature = 0.2, maxOutputTokens = 256 } }
+                : string.Equals(settings.Protocol, "chat-completions", StringComparison.OrdinalIgnoreCase)
+                    ? new { model = settings.Model, messages = new[] { new { role = "user", content = prompt } }, temperature = 0.2, stream = true }
+                    : new { model = settings.Model, input = prompt, store = false, stream = true };
             request.Content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
             using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token);
             if (!response.IsSuccessStatusCode) { await WriteEventAsync(output, "error", $"AI request failed ({(int)response.StatusCode}).", token); return; }
@@ -150,6 +158,7 @@ public sealed class AiSummaryService
 
     private static string? ExtractStreamText(JsonElement root, string protocol)
     {
+        if (IsGeminiProtocol(protocol)) return ExtractGeminiText(root);
         if (string.Equals(protocol, "chat-completions", StringComparison.OrdinalIgnoreCase))
         {
             return root.TryGetProperty("choices", out var choices) && choices.GetArrayLength() > 0 && choices[0].TryGetProperty("delta", out var delta) && delta.TryGetProperty("content", out var content) ? content.GetString() : null;
@@ -158,8 +167,27 @@ public sealed class AiSummaryService
     }
     private static string LimitSummary(string value) => value.Length <= MaxSummaryCharacters ? value : value[..MaxSummaryCharacters].TrimEnd() + "…";
     private static string NormalizeApiKey(string value) => new(value.Where(c => !char.IsWhiteSpace(c)).ToArray());
-    private static string Endpoint(AiSettings settings) { var route = string.Equals(settings.Protocol, "chat-completions", StringComparison.OrdinalIgnoreCase) ? "chat/completions" : "responses"; return settings.BaseUrl.EndsWith("/v1", StringComparison.OrdinalIgnoreCase) ? $"{settings.BaseUrl}/{route}" : $"{settings.BaseUrl}/v1/{route}"; }
-    private static string? ExtractChatText(JsonElement root) => root.TryGetProperty("choices", out var choices) && choices.GetArrayLength() > 0 && choices[0].TryGetProperty("message", out var message) && message.TryGetProperty("content", out var content) ? content.GetString() : null;
+    private static bool IsGemini(AiSettings settings) => string.Equals(settings.Provider, "gemini", StringComparison.OrdinalIgnoreCase) || string.Equals(settings.Protocol, "gemini", StringComparison.OrdinalIgnoreCase);
+    private static bool IsGeminiProtocol(string protocol) => string.Equals(protocol, "gemini", StringComparison.OrdinalIgnoreCase);
+    private static string Endpoint(AiSettings settings, bool streaming = false)
+    {
+        if (IsGemini(settings))
+        {
+            var route = streaming ? "streamGenerateContent?alt=sse" : "generateContent";
+            return $"{settings.BaseUrl.TrimEnd('/')}/models/{Uri.EscapeDataString(settings.Model)}:{route}";
+        }
+        var openAiRoute = string.Equals(settings.Protocol, "chat-completions", StringComparison.OrdinalIgnoreCase) ? "chat/completions" : "responses";
+        return settings.BaseUrl.EndsWith("/v1", StringComparison.OrdinalIgnoreCase) ? $"{settings.BaseUrl}/{openAiRoute}" : $"{settings.BaseUrl}/v1/{openAiRoute}";
+    }
+    private static string? ExtractGeminiText(JsonElement root)
+    {
+        if (!root.TryGetProperty("candidates", out var candidates) || candidates.GetArrayLength() == 0) return null;
+        var candidate = candidates[0];
+        if (!candidate.TryGetProperty("content", out var content) || !content.TryGetProperty("parts", out var parts)) return null;
+        var text = new StringBuilder();
+        foreach (var part in parts.EnumerateArray()) if (part.TryGetProperty("text", out var value)) text.Append(value.GetString());
+        return text.ToString();
+    }    private static string? ExtractChatText(JsonElement root) => root.TryGetProperty("choices", out var choices) && choices.GetArrayLength() > 0 && choices[0].TryGetProperty("message", out var message) && message.TryGetProperty("content", out var content) ? content.GetString() : null;
 
     private static string? ExtractText(JsonElement root)
     {
