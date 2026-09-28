@@ -104,6 +104,49 @@ curl -k https://localhost:8443/api/health
 
 Özel HTTPS portu kullanıldıysa `8443` yerine seçilen portu yazın. Tarayıcıda self-signed sertifika uyarısı görülmesi beklenir.
 
+## Yeni SQL Server ekleme
+
+Her kaynak SQL Server için ayrı bir Collector instance'ı çalıştırılır. Kaynak
+SQL Server üzerinde `DBA_PULSE` login/user ve read-only yetkiler hazırlandıktan
+sonra aşağıdaki script çalıştırılabilir:
+
+```bash
+./scripts/add-server.sh --name sql02 --host sql02.example.local --port 1433 --login DBA_PULSE
+```
+
+Başlatmadan önce yalnızca Compose tanımını doğrulamak için:
+
+```bash
+./scripts/add-server.sh --name sql02 --source-connection 'Server=sql02.example.local,1433;Database=master;User Id=DBA_PULSE;Password=***;TrustServerCertificate=True;Encrypt=False;' --dry-run
+```
+
+Gerçek şifreleri komut satırına yazmak yerine etkileşimli kullanım veya
+`DBAPULSE_NEW_SOURCE_CONNECTION` ortam değişkeni tercih edilmelidir.
+
+Script source şifresini etkileşimli olarak ister; şifre komut satırına yazılmaz.
+Önce şu script yeni kaynak SQL Server üzerinde uygulanmalıdır:
+
+```text
+database/security/Grant_DBA_PULSE_Source_ReadOnly.sql
+```
+
+Script, mevcut API veya management database'e elle server kaydı eklemez. Yeni
+Collector ilk başarılı cycle'da `server-info.sql` ile gerçek sunucu adını keşfeder
+ve `DBA_PULSE.dbo.Servers` tablosuna senkronize eder. Böylece mevcut Collector
+çalışmaya devam eder.
+
+Oluşturulan instance logları:
+
+```bash
+docker logs -f dbapulse-collector-sql02
+```
+
+Oluşturulan local Compose tanımı `.runtime/collectors/sql02/` altındadır. Bu
+klasör Git'e gönderilmez; source connection içerdiği için yalnızca yerel ve
+korumalı tutulmalıdır. Server, ilk cycle sonrasında UI'daki Servers & Databases
+listesinde görünür; collection interval ve active/inactive ayarları Settings →
+Server Settings bölümünden değiştirilebilir.
+
 ## Sorun giderme
 
 Container durumu:

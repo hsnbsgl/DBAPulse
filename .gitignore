@@ -23,3 +23,6 @@
 certs/
 
 .secrets/
+
+# Per-source Collector definitions; contain source connection strings
+.runtime/
