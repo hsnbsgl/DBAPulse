@@ -92,7 +92,11 @@ slugify() {
 }
 
 build_source_connection() {
-  local host="$1" port="$2" login="$3" password="$4" server_part="$host"
+  local host="$1"
+  local port="$2"
+  local login="$3"
+  local password="$4"
+  local server_part="$host"
   [[ -n "$port" ]] && server_part="$host,$port"
   password="${password//\"/\"\"}"
   printf 'Server=%s;Database=master;User Id=%s;Password="%s";Encrypt=False;TrustServerCertificate=True;' \
