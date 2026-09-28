@@ -36,7 +36,6 @@ public sealed class AiSettingsStore
 
 public sealed class AiSummaryService
 {
-    private const int MaxSummaryCharacters = 1000;
     private readonly HttpClient _http;
     private readonly AiSettingsStore _settings;
     private readonly DashboardStore _dashboard;
@@ -75,23 +74,23 @@ public sealed class AiSummaryService
         var detail = await _dashboard.GetServerDetailAsync(serverId, token);
         if (detail.Server is null) return new(true, settings.Provider, settings.Model, string.Empty, "Server not found.");
         var health = await _management.HealthAsync(serverId, null, token);
-        var prompt = $"You are a senior SQL Server operations assistant. Summarize the following server for an operator. Use concise Turkish with sections: Genel Durum, Riskler, Önerilen Aksiyonlar. Do not invent facts; explicitly say when data is unavailable. Keep the response under 1000 characters. Server: {JsonSerializer.Serialize(detail.Server)} Databases: {JsonSerializer.Serialize(detail.Databases)} Health signals: {JsonSerializer.Serialize(health)}";
+        var prompt = $"You are a senior SQL Server operations assistant. Summarize the following server for an operator. Use Turkish with sections: Genel Durum, Riskler, Önerilen Aksiyonlar. Do not invent facts; explicitly say when data is unavailable. Provide a sufficiently detailed response based on the available data. Server: {JsonSerializer.Serialize(detail.Server)} Databases: {JsonSerializer.Serialize(detail.Databases)} Health signals: {JsonSerializer.Serialize(health)}";
         try
         {
             using var request = new HttpRequestMessage(HttpMethod.Post, Endpoint(settings));
             if (IsGemini(settings)) request.Headers.TryAddWithoutValidation("x-goog-api-key", apiKey); else request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
             object payload = IsGemini(settings)
-                ? new { contents = new[] { new { parts = new[] { new { text = prompt } } } }, generationConfig = new { temperature = 0.2, maxOutputTokens = 256 } }
+                ? new { contents = new[] { new { parts = new[] { new { text = prompt } } } }, generationConfig = new { temperature = 0.2 } }
                 : string.Equals(settings.Protocol, "chat-completions", StringComparison.OrdinalIgnoreCase)
-                    ? new { model = settings.Model, messages = new[] { new { role = "user", content = prompt } }, temperature = 0.2, max_tokens = 256 }
-                    : new { model = settings.Model, input = prompt, store = false, max_output_tokens = 256 };
+                    ? new { model = settings.Model, messages = new[] { new { role = "user", content = prompt } }, temperature = 0.2 }
+                    : new { model = settings.Model, input = prompt, store = false };
             request.Content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
             using var response = await _http.SendAsync(request, token);
             var body = await response.Content.ReadAsStringAsync(token);
             if (!response.IsSuccessStatusCode) return new(true, settings.Provider, settings.Model, string.Empty, $"AI request failed ({(int)response.StatusCode}).");
             using var json = JsonDocument.Parse(body);
             var text = IsGemini(settings) ? ExtractGeminiText(json.RootElement) : json.RootElement.TryGetProperty("output_text", out var output) ? output.GetString() : string.Equals(settings.Protocol, "chat-completions", StringComparison.OrdinalIgnoreCase) ? ExtractChatText(json.RootElement) : ExtractText(json.RootElement);
-            return new(true, settings.Provider, settings.Model, LimitSummary(text ?? "AI response did not contain text."), null);
+            return new(true, settings.Provider, settings.Model, text ?? "AI response did not contain text.", null);
         }
         catch (TaskCanceledException ex) when (!token.IsCancellationRequested) { _logger.LogWarning(ex, "AI summary request timed out for {BaseUrl}", settings.BaseUrl); return new(true, settings.Provider, settings.Model, string.Empty, "AI provider request timed out."); }
         catch (HttpRequestException ex) { _logger.LogWarning(ex, "AI summary network/TLS error for {BaseUrl}", settings.BaseUrl); return new(true, settings.Provider, settings.Model, string.Empty, $"AI provider network/TLS error: {ex.Message}"); }
@@ -106,13 +105,13 @@ public sealed class AiSummaryService
         var detail = await _dashboard.GetServerDetailAsync(serverId, token);
         if (detail.Server is null) { await WriteEventAsync(output, "error", "Server not found.", token); return; }
         var health = await _management.HealthAsync(serverId, null, token);
-        var prompt = $"You are a senior SQL Server operations assistant. Summarize the following server for an operator. Use concise Turkish with sections: Genel Durum, Riskler, Önerilen Aksiyonlar. Do not invent facts; explicitly say when data is unavailable. Keep the response under 1000 characters. Server: {JsonSerializer.Serialize(detail.Server)} Databases: {JsonSerializer.Serialize(detail.Databases)} Health signals: {JsonSerializer.Serialize(health)}";
+        var prompt = $"You are a senior SQL Server operations assistant. Summarize the following server for an operator. Use Turkish with sections: Genel Durum, Riskler, Önerilen Aksiyonlar. Do not invent facts; explicitly say when data is unavailable. Provide a sufficiently detailed response based on the available data. Server: {JsonSerializer.Serialize(detail.Server)} Databases: {JsonSerializer.Serialize(detail.Databases)} Health signals: {JsonSerializer.Serialize(health)}";
         try
         {
             using var request = new HttpRequestMessage(HttpMethod.Post, Endpoint(settings, true));
             if (IsGemini(settings)) request.Headers.TryAddWithoutValidation("x-goog-api-key", apiKey); else request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
             object payload = IsGemini(settings)
-                ? new { contents = new[] { new { parts = new[] { new { text = prompt } } } }, generationConfig = new { temperature = 0.2, maxOutputTokens = 256 } }
+                ? new { contents = new[] { new { parts = new[] { new { text = prompt } } } }, generationConfig = new { temperature = 0.2 } }
                 : string.Equals(settings.Protocol, "chat-completions", StringComparison.OrdinalIgnoreCase)
                     ? new { model = settings.Model, messages = new[] { new { role = "user", content = prompt } }, temperature = 0.2, stream = true }
                     : new { model = settings.Model, input = prompt, store = false, stream = true };
@@ -121,7 +120,6 @@ public sealed class AiSummaryService
             if (!response.IsSuccessStatusCode) { await WriteEventAsync(output, "error", $"AI request failed ({(int)response.StatusCode}).", token); return; }
             await using var body = await response.Content.ReadAsStreamAsync(token);
             using var reader = new StreamReader(body);
-            var emittedCharacters = 0;
             while (await reader.ReadLineAsync(token) is { } line)
             {
                 if (!line.StartsWith("data:", StringComparison.OrdinalIgnoreCase)) continue;
@@ -132,14 +130,7 @@ public sealed class AiSummaryService
                     using var json = JsonDocument.Parse(data);
                     var text = ExtractStreamText(json.RootElement, settings.Protocol);
                     if (!string.IsNullOrEmpty(text))
-                    {
-                        var remaining = MaxSummaryCharacters - emittedCharacters;
-                        if (remaining <= 0) break;
-                        var piece = text.Length <= remaining ? text : text[..remaining];
-                        await WriteEventAsync(output, "token", piece, token);
-                        emittedCharacters += piece.Length;
-                        if (emittedCharacters >= MaxSummaryCharacters) break;
-                    }
+                        await WriteEventAsync(output, "token", text, token);
                 }
                 catch (JsonException) { /* Ignore provider keep-alive or non-JSON SSE frames. */ }
             }
@@ -165,7 +156,6 @@ public sealed class AiSummaryService
         }
         return root.TryGetProperty("delta", out var responseDelta) && responseDelta.ValueKind == JsonValueKind.String ? responseDelta.GetString() : null;
     }
-    private static string LimitSummary(string value) => value.Length <= MaxSummaryCharacters ? value : value[..MaxSummaryCharacters].TrimEnd() + "…";
     private static string NormalizeApiKey(string value) => new(value.Where(c => !char.IsWhiteSpace(c)).ToArray());
     private static bool IsGemini(AiSettings settings) => string.Equals(settings.Provider, "gemini", StringComparison.OrdinalIgnoreCase) || string.Equals(settings.Protocol, "gemini", StringComparison.OrdinalIgnoreCase);
     private static bool IsGeminiProtocol(string protocol) => string.Equals(protocol, "gemini", StringComparison.OrdinalIgnoreCase);

@@ -65,16 +65,11 @@ POST /api/servers/{serverId}/ai-summary/stream
 
 Endpoint authentication gerektirir. Nginx buffering kapatılmıştır ve uzun AI yanıtları için timeout ayarları artırılmıştır.
 
-## Yanıt sınırı
+## Yanıt boyutu
 
-AI Summary backend ve frontend tarafında maksimum **1000 karakter** ile sınırlıdır.
-
-- Prompt modelden 1000 karakteri aşmamasını ister.
-- Chat Completions için token sınırı uygulanır.
-- Streaming 1000 karaktere ulaştığında durur.
-- Frontend de ek güvenlik olarak metni 1000 karakterde keser.
-
-Bu sınır sonsuz veya gereksiz uzun model yanıtlarını önlemek içindir.
+AI Summary için uygulama katmanında karakter veya token limiti uygulanmaz.
+Yanıt boyutu kullanılan modelin kendi context/output limitleriyle sınırlıdır.
+Streaming yanıtı frontend'e parça parça aktarılır ve frontend metni kesmez.
 
 ## Prompt davranışı
 

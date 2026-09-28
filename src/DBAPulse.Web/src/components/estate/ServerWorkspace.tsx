@@ -230,7 +230,7 @@ function AiSummaryTab({ serverId }: { serverId: number }) {
           let event = 'message'; let data = '';
           block.split(/\r?\n/).forEach(line => { if (line.startsWith('event:')) event = line.slice(6).trim(); else if (line.startsWith('data:')) data += line.slice(5).trim(); });
           if (!data || cancelled) return; let value = ''; try { value = JSON.parse(data); } catch { value = data; }
-          if (event === 'token') setSummary(current => (current + value).slice(0, 1000)); else if (event === 'error') setError(value || 'AI provider could not be reached.');
+          if (event === 'token') setSummary(current => current + value); else if (event === 'error') setError(value || 'AI provider could not be reached.');
         };
         while (true) { const result = await reader.read(); if (result.done) break; buffer += decoder.decode(result.value, { stream: true }); const blocks = buffer.split(/\r?\n\r?\n/); buffer = blocks.pop() || ''; blocks.forEach(consume); }
         if (buffer) consume(buffer);

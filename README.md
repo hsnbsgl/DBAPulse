@@ -83,7 +83,7 @@ Bu yollar `.gitignore` içindedir; Git’e veya açık yedeklere gönderilmemeli
 
 Server detayındaki AI Summary sekmesi OpenAI uyumlu `chat-completions` ve `responses` protokollerini destekler. On-prem servisler için Settings > AI Settings bölümünden provider, model, base URL, protokol ve API key tanımlanabilir.
 
-Yanıtlar streaming olarak gösterilir ve backend/frontend katmanında maksimum 1000 karakterle sınırlıdır. Local Ollama varsayılan adresi `http://host.docker.internal:11434/v1`, API key değeri `ollama`dır.
+Yanıtlar streaming olarak gösterilir; uygulama katmanında karakter limiti yoktur. Yanıt boyutu modelin kendi context/output limitleriyle sınırlıdır. Local Ollama varsayılan adresi `http://host.docker.internal:11434/v1`, API key değeri `ollama`dır.
 
 ## Yönetim komutları
 
