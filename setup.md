@@ -164,3 +164,24 @@ Local LLM bağlantısı için:
 docker exec dbapulse-ollama ollama ps
 docker network inspect dbapulse_default
 ```
+
+Geçici lab kullanımı için LLM sertifika doğrulaması aşağıdaki ayarla
+etkinleştirilebilir. Bu ayar yalnızca AI/LLM HttpClient'ını etkiler; varsayılan
+değer `false` olmalıdır ve production ortamında kullanılmamalıdır:
+
+```env
+DBAPULSE_AI_ALLOW_INVALID_CERTIFICATE=true
+```
+
+Değişiklikten sonra API container'ını yeniden oluşturun:
+
+```bash
+docker compose -f docker-compose.phase2.yml up -d --force-recreate dbapulse-api
+```
+
+Bu ayarı ve API image rebuild/recreate işlemini tek komutla yapmak için proje
+kök dizinindeki script kullanılabilir:
+
+```bash
+./update.sh
+```

@@ -26,3 +26,6 @@ certs/
 
 # Per-source Collector definitions; contain source connection strings
 .runtime/
+
+# Temporary update script files
+.env.update.*

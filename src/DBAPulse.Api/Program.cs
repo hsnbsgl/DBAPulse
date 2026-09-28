@@ -26,7 +26,15 @@ builder.Services.AddSingleton<SmtpSettingsService>();
 builder.Services.AddSingleton<AdSettingsStore>();
 builder.Services.AddSingleton<AdSettingsService>();
 builder.Services.AddSingleton<ServerSettingsService>();
-builder.Services.AddHttpClient<AiSummaryService>(client => client.Timeout = TimeSpan.FromMinutes(5));
+var allowInvalidAiCertificate = string.Equals(builder.Configuration["DBAPULSE_AI_ALLOW_INVALID_CERTIFICATE"], "true", StringComparison.OrdinalIgnoreCase);
+builder.Services.AddHttpClient<AiSummaryService>(client => client.Timeout = TimeSpan.FromMinutes(5))
+    .ConfigurePrimaryHttpMessageHandler(() =>
+    {
+        var handler = new HttpClientHandler();
+        if (allowInvalidAiCertificate)
+            handler.ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator;
+        return handler;
+    });
 builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme).AddCookie(options =>
 {
     options.Cookie.Name = "dbapulse.auth";
