@@ -34,11 +34,11 @@ public sealed class OperationalEventCorrelator
     public IReadOnlyList<OperationalEventInput> Deadlocks(IEnumerable<DeadlockInventory> rows, int serverId, DateTime collectedAtUtc)
         => rows.Select(r => new OperationalEventInput("Deadlock", serverId, null, r.DeadlockHash, r.OccurredAt, r.OccurredAt, 0, "Resolved", _deadlockSeverity, 1, null, "Deadlock detected", $"Deadlock with {r.ProcessCount} processes.", null, null)).ToArray();
 
-    public IReadOnlyList<OperationalEventInput> BackupProtection(IEnumerable<DatabaseInventory> databases, IEnumerable<BackupInventory> backups, int serverId, IReadOnlyDictionary<string, int> databaseIds, DateTime capturedAtUtc)
+    public IReadOnlyList<OperationalEventInput> BackupProtection(IEnumerable<DatabaseInventory> databases, IEnumerable<BackupInventory> backups, int serverId, IReadOnlyDictionary<string, int> databaseIds, string serverEnvironment, IReadOnlyDictionary<string, string> databaseModes, DateTime capturedAtUtc)
     {
         var latest = backups.GroupBy(x => $"{x.DatabaseName}|{x.BackupType}", StringComparer.OrdinalIgnoreCase).ToDictionary(x => x.Key, x => x.OrderByDescending(y => y.BackupFinish).First(), StringComparer.OrdinalIgnoreCase);
         var result = new List<OperationalEventInput>();
-        foreach (var db in databases.Where(x => !x.DatabaseName.Equals("tempdb", StringComparison.OrdinalIgnoreCase) && x.DatabaseStatus.Equals("ONLINE", StringComparison.OrdinalIgnoreCase)))
+        foreach (var db in databases.Where(x => !x.DatabaseName.Equals("tempdb", StringComparison.OrdinalIgnoreCase) && x.DatabaseStatus.Equals("ONLINE", StringComparison.OrdinalIgnoreCase) && IsBackupRequired(serverEnvironment, databaseModes.TryGetValue(x.DatabaseName, out var mode) ? mode : "Auto", x.IsMirrored)))
         {
             var full = latest.TryGetValue($"{db.DatabaseName}|FULL", out var f) ? f.BackupFinish : null;
             var differential = latest.TryGetValue($"{db.DatabaseName}|DIFFERENTIAL", out var d) ? d.BackupFinish : null;
@@ -56,6 +56,9 @@ public sealed class OperationalEventCorrelator
         }
         return result;
     }
+
+    private static bool IsBackupRequired(string environment, string mode, bool isMirrored)
+        => !isMirrored && (string.Equals(environment, "Prod", StringComparison.OrdinalIgnoreCase) || string.Equals(mode, "Required", StringComparison.OrdinalIgnoreCase));
 
     public IReadOnlyList<OperationalEventInput> JobFailures(IEnumerable<JobInventory> jobs, int serverId, DateTime capturedAtUtc)
         => jobs.Where(x => x.Enabled && x.LastRunStatus == "Failed").Select(x => new OperationalEventInput("JobFailure", serverId, null, Fingerprint("JobFailure", serverId, x.JobId, x.LastRunAtSource?.ToString("O")), capturedAtUtc, capturedAtUtc, (x.LastRunDurationSeconds ?? 0) * 1000L, "Active", x.RepeatedFailure ? "Critical" : "Warning", 1, null, $"Job failure: {x.JobName}", $"Job has failed {x.FailureCount24Hours} time(s) in the last 24 hours.", null, null)).ToArray();

@@ -100,7 +100,7 @@ public sealed class CollectorWorker : BackgroundService
             var databases = await _source.ReadDatabasesAsync(token);
             LogRows("inventory/databases.sql", databases.Count);
             var serverId = serverIds[servers[0].ServerName];
-            var databaseInputs = databases.Select(d => new DatabaseInput(serverId, d.DatabaseName, d.RecoveryModel, d.DatabaseStatus, DateTimeOffset.UtcNow, true)).ToArray();
+            var databaseInputs = databases.Select(d => new DatabaseInput(serverId, d.DatabaseName, d.RecoveryModel, d.DatabaseStatus, DateTimeOffset.UtcNow, true, d.IsMirrored, d.MirroringRole)).ToArray();
             var databaseIds = await _store.SyncDatabasesAsync(databaseInputs, token);
             _logger.LogInformation("Databases sync OK - {Count} rows", databaseIds.Count);
 
@@ -114,7 +114,10 @@ public sealed class CollectorWorker : BackgroundService
                 var table = Table(("CollectionRunId", typeof(long)), ("ServerId", typeof(int)), ("DatabaseId", typeof(int)), ("DatabaseName", typeof(string)), ("CollectedAtUtc", typeof(DateTime)), ("BackupType", typeof(string)), ("BackupStartAtSource", typeof(DateTime)), ("BackupFinishAtSource", typeof(DateTime)), ("BackupSizeMb", typeof(decimal)), ("CompressedBackupSizeMb", typeof(decimal)), ("IsCopyOnly", typeof(bool)), ("BackupDurationSeconds", typeof(int)));
                 foreach (var r in rows) table.Rows.Add(runId, serverId, Db(databaseIds, r.DatabaseName), r.DatabaseName, DateTime.UtcNow, r.BackupType, Db(r.BackupStart), Db(r.BackupFinish), Db(r.BackupSizeMb), Db(r.CompressedBackupSizeMb), r.IsCopyOnly, Db(r.DurationSeconds));
                 _logger.LogInformation("BackupSnapshots {Count} rows inserted", await _store.InsertProtectionBackupsAsync(table, token));
-                var events = _correlator.BackupProtection(databases, rows, serverId, databaseIds, DateTime.UtcNow);
+                var backupCollectedAtUtc = DateTime.UtcNow;
+                await _store.MarkBackupCollectionSuccessAsync(serverId, backupCollectedAtUtc, token);
+                var backupScope = await _store.GetBackupProtectionScopeAsync(serverId, token);
+                var events = _correlator.BackupProtection(databases, rows, serverId, databaseIds, backupScope.Environment, backupScope.DatabaseModes, backupCollectedAtUtc);
                 _logger.LogInformation("Backup protection operational events correlated: {Count}", await _store.UpsertOperationalEventsAsync(events, DateTime.UtcNow, token));
                 await _store.ResolveOperationalEventsAsync("BackupProtection", _protectionResolveSeconds, DateTime.UtcNow, token);
             }, token);

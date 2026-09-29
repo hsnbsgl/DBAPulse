@@ -18,6 +18,8 @@ Faz 1'deki `BackupSnapshots`, `JobSnapshots` ve `AlwaysOnSnapshots` korunmuştur
 
 V029 ile `dbo.BackupPolicies` ve başlangıç Default policy oluşturulmuştur: full 24 saat, differential 24 saat, log 60 dakika, warning yüzde 80. V052, differential freshness kuralını `usp_BackupProtection_List` ve `usp_ProtectionAvailability_Overview` içinde uygular. Bunlar kurumsal SLA değildir; ileride policy yönetimi genişletilebilir. Kaynak `backup_start_date`/`backup_finish_date` alanları source-local semantics ile saklanır; otomatik UTC etiketi verilmez.
 
+V053 ile sunucu bazında `Dev`, `Test`, `Stage` ve `Prod` ortamı tanımlanabilir hale gelmiştir. `Prod` ortamında tüm aktif kullanıcı database'leri backup protection kapsamına alınır; diğer ortamlarda kapsam, Settings ekranından database bazında `Required` seçilerek belirlenir. `Auto` kapsam dışı, `Excluded` ise açıkça hariç durumudur. Mirroring metadata'sı source SQL'den read-only okunur; `IsMirrored = 1` olan database'ler ortamdan veya manuel seçimden bağımsız olarak `NotApplicable` kabul edilir ve backup protection için critical sayılmaz. `tempdb` de aynı şekilde kapsam dışıdır. Başarılı backup collection zamanı ayrıca server üzerinde tutulur; başarısız collection bu zamanı güncellemez ve aktif risklerin yanlışlıkla çözülmesini engeller.
+
 ## Always On
 
 Always On sorgusu availability group, replica, synchronization, connection, suspend ve queue alanlarını read-only DMV'lerden toplar. Always On yoksa sorgu başarılı biçimde sıfır satır döner; UI `Always On is not configured` gösterir. `Disconnected`, suspended veya `NOT_HEALTHY` durumları Critical; partial/not-synchronizing durumları Warning; queue değerleri ise gözlem olarak gösterilir, tek başına incident/anomaly değildir. Commit zamanı source-local semantics ile tutulur.
@@ -32,7 +34,7 @@ List read model'leri son collection zamanını döndürür ve 30 dakikayı aşan
 
 ## Stored procedures, API ve UI
 
-V029–V034 migration'ları policy, extended input types, persistence procedures, dashboard read models ve indexleri içerir. API endpointleri:
+V029–V034 migration'ları policy, extended input types, persistence procedures, dashboard read models ve indexleri içerir. V053, server environment, database backup scope ve mirroring alanlarını; `usp_Databases_Sync_V2`, `usp_BackupCollection_MarkSuccess` ve kapsam-aware protection procedure'lerini ekler. API endpointleri:
 
 - `GET /api/protection/overview`
 - `GET /api/protection/backups`
@@ -42,7 +44,7 @@ V029–V034 migration'ları policy, extended input types, persistence procedures
 - `GET /api/jobs`
 - `GET /api/jobs/{id}`
 
-Yeni React ekranı Protection & Availability; backup, Always On ve SQL Agent bölümlerini ayrı gösterir ve her bölümde 10 kayıt/sayfa kullanır. Yeni endpointler audit middleware tarafından `Protection.*`, `Availability.*` ve `Jobs.*` action'ları ile audit edilir.
+Yeni React ekranı Protection & Availability; backup, Always On ve SQL Agent bölümlerini ayrı gösterir ve her bölümde 10 kayıt/sayfa kullanır. Yeni endpointler audit middleware tarafından `Protection.*`, `Availability.*` ve `Jobs.*` action'ları ile audit edilir. Settings > Server Settings ekranında ortam seçimi ve aktif database'ler için backup kapsamı ayarlanabilir. Prod ve mirrored database satırları kullanıcı tarafından değiştirilemez; arayüz kapsam nedenini açıkça gösterir.
 
 ## Operational Events
 

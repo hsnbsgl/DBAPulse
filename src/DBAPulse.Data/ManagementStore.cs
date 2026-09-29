@@ -72,8 +72,33 @@ public sealed class ManagementStore
         table.Columns.Add("ServerId", typeof(int)); table.Columns.Add("DatabaseName", typeof(string));
         table.Columns.Add("RecoveryModel", typeof(string)); table.Columns.Add("DatabaseStatus", typeof(string));
         table.Columns.Add("LastSeenAtUtc", typeof(DateTime)); table.Columns.Add("IsActive", typeof(bool));
-        foreach (var r in rows) table.Rows.Add(r.ServerId, r.DatabaseName, r.RecoveryModel, r.DatabaseStatus, r.LastSeenAtUtc.UtcDateTime, r.IsActive);
-        return await SyncMapAsync("dbo.usp_Databases_Sync", "dbo.DatabaseInputType", table, "DatabaseName", token);
+        table.Columns.Add("IsMirrored", typeof(bool)); table.Columns.Add("MirroringRole", typeof(string));
+        foreach (var r in rows) table.Rows.Add(r.ServerId, r.DatabaseName, r.RecoveryModel, r.DatabaseStatus, r.LastSeenAtUtc.UtcDateTime, r.IsActive, r.IsMirrored, Db(r.MirroringRole));
+        return await SyncMapAsync("dbo.usp_Databases_Sync_V2", "dbo.DatabaseInputTypeV2", table, "DatabaseName", token);
+    }
+
+    public async Task MarkBackupCollectionSuccessAsync(int serverId, DateTime collectedAtUtc, CancellationToken token)
+    {
+        await using var connection = await OpenAsync(token);
+        await using var command = Procedure(connection, "dbo.usp_BackupCollection_MarkSuccess");
+        command.Parameters.AddWithValue("@ServerId", serverId);
+        command.Parameters.Add(new SqlParameter("@CollectedAtUtc", SqlDbType.DateTime2) { Value = collectedAtUtc });
+        await command.ExecuteNonQueryAsync(token);
+    }
+
+    public async Task<(string Environment, Dictionary<string, string> DatabaseModes)> GetBackupProtectionScopeAsync(int serverId, CancellationToken token)
+    {
+        await using var connection = await OpenAsync(token);
+        await using var command = new SqlCommand("SELECT s.Environment,d.DatabaseName,d.BackupProtectionMode FROM dbo.Servers s LEFT JOIN dbo.Databases d ON d.ServerId=s.Id AND d.IsActive=1 WHERE s.Id=@ServerId", connection);
+        command.Parameters.AddWithValue("@ServerId", serverId);
+        await using var reader = await command.ExecuteReaderAsync(token);
+        var environment = "Dev"; var modes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        while (await reader.ReadAsync(token))
+        {
+            environment = reader.IsDBNull(0) ? "Dev" : reader.GetString(0);
+            if (!reader.IsDBNull(1)) modes[reader.GetString(1)] = reader.IsDBNull(2) ? "Auto" : reader.GetString(2);
+        }
+        return (environment, modes);
     }
 
     public Task<int> InsertServerSnapshotsAsync(DataTable rows, CancellationToken token) => InsertAsync("dbo.usp_ServerSnapshots_Insert", "dbo.ServerSnapshotInputType", rows, token);

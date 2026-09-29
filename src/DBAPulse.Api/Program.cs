@@ -111,6 +111,8 @@ app.MapPost("/api/settings/ad/test", async (AdSettingsService service, Cancellat
 app.MapPut("/api/settings/ad", (AdSettingsUpdate update, AdSettingsStore store) => { store.Update(update); return Results.Ok(store.View()); });
 app.MapGet("/api/settings/servers", async (ServerSettingsService service, CancellationToken token) => Results.Ok(await service.ListAsync(token)));
 app.MapPut("/api/settings/servers/{id:int}", async (int id, ServerSettingsUpdate update, ServerSettingsService service, CancellationToken token) => Results.Ok(new { success = await service.UpdateAsync(id, update, token) }));
+app.MapGet("/api/settings/backup-scope", async (int? serverId, ServerSettingsService service, CancellationToken token) => Results.Ok(await service.ListBackupScopeAsync(serverId, token)));
+app.MapPut("/api/settings/backup-scope/{databaseId:int}", async (int databaseId, BackupScopeUpdate update, ServerSettingsService service, CancellationToken token) => Results.Ok(new { success = await service.UpdateBackupScopeAsync(databaseId, update, token) }));
 app.MapGet("/api/databases", async (int? page, int? pageSize, string? search, DashboardStore store, CancellationToken token) => Results.Ok(await store.GetDatabasesAsync(Math.Max(1, page ?? 1), Math.Clamp(pageSize ?? 50, 1, 100), search, token)));
 app.MapGet("/api/databases/{id:int}", async (int id, DashboardStore store, CancellationToken token) => { var value = await store.GetDatabaseDetailAsync(id, token); return value is null ? Results.NotFound() : Results.Ok(value); });
 app.MapGet("/api/databases/{id:int}/capacity-history", async (int id, int? days, DashboardStore store, CancellationToken token) => Results.Ok(await store.GetCapacityHistoryAsync(id, days ?? 30, token)));
