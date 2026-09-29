@@ -37,7 +37,9 @@ type Deadlock = { id: number; occurredAtUtc: string; serverName: string; databas
 type LongRunning = { id: number; capturedAtUtc: string; serverName: string; databaseName?: string; sessionId: number; elapsedMs: number; status?: string; waitType?: string; applicationName?: string };
 type OperationalEvent = { id: number; eventType: string; serverName: string; databaseName?: string; startedAtUtc: string; lastSeenAtUtc: string; status: string; severity: string; durationMs: number; title: string };
 type Anomaly = { id: number; metricType: string; databaseName?: string; entityKey?: string; observedAtUtc: string; observedValue: number; baselineMedian: number; baselineP95: number; deviationRatio?: number; modifiedZScore?: number; baselineScope: string; sampleCount: number; severity: string; status: string; explanationCode: string; startedAtUtc: string; lastSeenAtUtc: string };
-type WorkspaceData = { server: ServerDetail; capacity: Page<CapacityDb>; volumes: Page<Volume>; backups: Page<Backup>; alwaysOn: Page<AlwaysOn>; jobs: Page<Job>; blocking: Blocking[]; deadlocks: Deadlock[]; longRunning: LongRunning[]; operations: Page<OperationalEvent>; anomalies: Page<Anomaly> };
+type ManagementAttention = { id: number; severity: string; domain: string; issue: string; explanationCode: string; databaseName?: string; status: string };
+type ManagementHealth = { entityType: string; serverId: number; databaseId?: number; serverName: string; databaseName?: string; overallStatus: string; performanceStatus: string; protectionStatus: string; availabilityStatus: string; capacityStatus: string; anomalyStatus: string; freshnessStatus: string };
+type WorkspaceData = { server: ServerDetail; serverHealth?: ManagementHealth; serverAttention: ManagementAttention[]; capacity: Page<CapacityDb>; volumes: Page<Volume>; backups: Page<Backup>; alwaysOn: Page<AlwaysOn>; jobs: Page<Job>; blocking: Blocking[]; deadlocks: Deadlock[]; longRunning: LongRunning[]; operations: Page<OperationalEvent>; anomalies: Page<Anomaly> };
 
 type SortState = { key: string; direction: 'asc' | 'desc' };
 
@@ -61,6 +63,26 @@ function SortHeader({ label, sortKey, sort, onSort }: { label: string; sortKey: 
 const toggleSort = (current: SortState, key: string): SortState => current.key === key ? { key, direction: current.direction === 'asc' ? 'desc' : 'asc' } : { key, direction: 'asc' };
 
 const chartPageSize = 10;
+
+const serverHealthReasons = (health?: ManagementHealth) => {
+  if (!health) return [] as Array<{ label: string; status: string }>;
+  const signals = [
+    { label: 'Performance', status: health.performanceStatus },
+    { label: 'Protection', status: health.protectionStatus },
+    { label: 'Availability', status: health.availabilityStatus },
+    { label: 'Capacity', status: health.capacityStatus },
+    { label: 'Anomaly', status: health.anomalyStatus },
+    { label: 'Data freshness', status: health.freshnessStatus },
+  ];
+  return signals.filter(signal => {
+    const status = signal.status.toLowerCase();
+    // The current management rollup reports capacity as Unknown until its
+    // dedicated health signal is available. Do not present that as the cause
+    // of an unrelated server warning, but keep real future capacity states.
+    if (signal.label === 'Capacity' && status === 'unknown') return false;
+    return !['healthy', 'fresh', 'notconfigured'].includes(status);
+  });
+};
 
 function ChartPager({ page, total, onChange }: { page: number; total: number; onChange: (page: number) => void }) {
   const pageCount = Math.max(1, Math.ceil(total / chartPageSize));
@@ -152,7 +174,21 @@ function AnomaliesTab({ data }: { data: WorkspaceData }) {
   }), [data.anomalies.items, sort]);
   const visibleRows = rows.slice(0, pageSize === ALL_RECORDS ? rows.length : pageSize);
   const onSort = (key: string) => setSort(current => toggleSort(current, key));
+  const healthStatus = data.serverHealth?.overallStatus || 'Unknown';
+  const healthReasons = serverHealthReasons(data.serverHealth);
+  const attentionReasons = data.serverAttention.filter(reason => reason.status.toLowerCase() === 'active');
+  const healthIsHealthy = healthStatus.toLowerCase() === 'healthy';
+  const healthAlertSeverity: 'error' | 'warning' | 'info' = healthStatus.toLowerCase() === 'critical' ? 'error' : healthStatus.toLowerCase() === 'unknown' ? 'info' : 'warning';
   return <Stack spacing={2}>
+    {data.serverHealth && !healthIsHealthy && <Alert severity={healthAlertSeverity} variant="outlined">
+      <Stack spacing={0.75}>
+        <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
+          <Typography variant="subtitle2">Server health requires attention</Typography>
+          <StatusChip value={healthStatus} />
+        </Stack>
+        {attentionReasons.length ? <Stack spacing={0.25}>{attentionReasons.map(reason => <Typography key={reason.id} variant="body2"><StatusChip value={reason.severity} /> <b>{reason.domain}:</b> {reason.issue} <Typography component="span" variant="caption" color="text.secondary">({reason.explanationCode})</Typography>{reason.databaseName ? ` · ${reason.databaseName}` : ''}</Typography>)}</Stack> : healthReasons.length ? <Stack spacing={0.25}>{healthReasons.map(reason => <Typography key={reason.label} variant="body2"><b>{reason.label}:</b> {reason.status}</Typography>)}</Stack> : <Typography variant="body2">The health rollup reported {healthStatus}, but no detailed domain reason was returned.</Typography>}
+      </Stack>
+    </Alert>}
     <Paper className="panel"><Stack direction="row" justifyContent="space-between" alignItems="center"><Typography variant="h6">Anomalies ({data.anomalies.totalCount})</Typography></Stack><ListToolbar filename="server-anomalies" rows={visibleRows} pageSize={pageSize} onPageSizeChange={setPageSize} /><Divider sx={{ my: 1.5 }} />{data.anomalies.items.length ? <Table size="small"><TableHead><TableRow><SortHeader label="Severity" sortKey="severity" sort={sort} onSort={onSort} /><SortHeader label="Metric" sortKey="metricType" sort={sort} onSort={onSort} /><SortHeader label="Database / Entity" sortKey="entity" sort={sort} onSort={onSort} /><SortHeader label="Observed" sortKey="observedValue" sort={sort} onSort={onSort} /><SortHeader label="Median" sortKey="baselineMedian" sort={sort} onSort={onSort} /><SortHeader label="P95" sortKey="baselineP95" sort={sort} onSort={onSort} /><SortHeader label="Deviation" sortKey="deviationRatio" sort={sort} onSort={onSort} /><SortHeader label="Status" sortKey="status" sort={sort} onSort={onSort} /><SortHeader label="Last Seen" sortKey="lastSeenAtUtc" sort={sort} onSort={onSort} /></TableRow></TableHead><TableBody>{visibleRows.map(row => <TableRow key={row.id}><TableCell><StatusChip value={row.severity} /></TableCell><TableCell>{row.metricType}</TableCell><TableCell>{row.databaseName || row.entityKey || 'N/A'}</TableCell><TableCell>{row.observedValue.toLocaleString()}</TableCell><TableCell>{row.baselineMedian.toLocaleString()}</TableCell><TableCell>{row.baselineP95.toLocaleString()}</TableCell><TableCell>{row.deviationRatio == null ? 'N/A' : `${row.deviationRatio.toFixed(2)}x`}</TableCell><TableCell><StatusChip value={row.status} /></TableCell><TableCell>{date(row.lastSeenAtUtc)}</TableCell></TableRow>)}</TableBody></Table> : <EmptyState title="No anomalies for this server" description="No anomaly findings are available for the selected server." />}</Paper>
   </Stack>;
 }
@@ -365,10 +401,13 @@ export default function ServerWorkspace({ serverId, onDatabase, onBack, fullPage
       get<LongRunning[]>('/performance/long-running?hours=24'),
       get<Page<OperationalEvent>>(`/operations/events?serverId=${serverId}&page=1&pageSize=100`),
       get<Page<Anomaly>>(`/anomalies?serverId=${serverId}&page=1&pageSize=100`),
-    ]).then(([server, capacity, volumes, backups, alwaysOn, jobs, blocking, deadlocks, longRunning, operations, anomalies]) => {
+      get<ManagementHealth[]>('/management/health').catch(() => [] as ManagementHealth[]),
+      get<Page<ManagementAttention>>(`/management/attention?serverId=${serverId}&page=1&pageSize=100`).catch(() => ({ items: [], totalCount: 0 } as Page<ManagementAttention>)),
+    ]).then(([server, capacity, volumes, backups, alwaysOn, jobs, blocking, deadlocks, longRunning, operations, anomalies, healthRows, attention]) => {
       if (cancelled) return;
       const serverName = server.server.serverName;
-      setData({ server, capacity, volumes, backups, alwaysOn, jobs, blocking: blocking.filter(x => x.serverName === serverName), deadlocks: deadlocks.filter(x => x.serverName === serverName), longRunning: longRunning.filter(x => x.serverName === serverName), operations, anomalies });
+      const serverHealth = healthRows.find(row => row.entityType === 'Server' && row.serverId === serverId);
+      setData({ server, serverHealth, serverAttention: attention.items, capacity, volumes, backups, alwaysOn, jobs, blocking: blocking.filter(x => x.serverName === serverName), deadlocks: deadlocks.filter(x => x.serverName === serverName), longRunning: longRunning.filter(x => x.serverName === serverName), operations, anomalies });
     }).catch(errorValue => { if (!cancelled) setError(errorValue.message); });
     return () => { cancelled = true; };
   }, [serverId]);
@@ -415,8 +454,13 @@ export default function ServerWorkspace({ serverId, onDatabase, onBack, fullPage
           break;
         }
         case 'server-anomalies': {
-          const anomalies = await get<Page<Anomaly>>(`/anomalies?serverId=${serverId}&page=1&pageSize=100`);
-          setData(current => current ? { ...current, anomalies } : current);
+          const [anomalies, healthRows, attention] = await Promise.all([
+            get<Page<Anomaly>>(`/anomalies?serverId=${serverId}&page=1&pageSize=100`),
+            get<ManagementHealth[]>('/management/health').catch(() => [] as ManagementHealth[]),
+            get<Page<ManagementAttention>>(`/management/attention?serverId=${serverId}&page=1&pageSize=100`).catch(() => ({ items: [], totalCount: 0 } as Page<ManagementAttention>)),
+          ]);
+          const serverHealth = healthRows.find(row => row.entityType === 'Server' && row.serverId === serverId);
+          setData(current => current ? { ...current, anomalies, serverHealth, serverAttention: attention.items } : current);
           break;
         }
         case 'server-blocking': {
