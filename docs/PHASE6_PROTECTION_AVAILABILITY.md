@@ -14,9 +14,9 @@ Faz 1'deki `BackupSnapshots`, `JobSnapshots` ve `AlwaysOnSnapshots` korunmuştur
 
 ## Backup collection and protection
 
-`queries/backup/last-backups.sql`, `msdb.dbo.backupset` içindeki her database/type için son başarılı kaydı okur. Full, differential, log ve copy-only ayrımı korunur. `FULL`/`BULK_LOGGED` recovery modelinde log backup yaşı değerlendirilir; `SIMPLE` için log backup eksikliği üretilmez. `tempdb` `NotApplicable`, hiç full backup görülmeyen database `NeverBackedUp`, collection verisi bulunmayan durum `Unknown` olarak ele alınır.
+`queries/backup/last-backups.sql`, `msdb.dbo.backupset` içindeki her database/type için son başarılı kaydı okur. Full, differential, log ve copy-only ayrımı korunur. Protection freshness hesabında son geçerli Full **veya** Differential backup kullanılır; günlük Differential backup, aynı policy penceresi içinde yeni Full alınmamış olsa bile database'i korumalı kabul ettirebilir. Hiç Full/Differential görülmeyen database `NeverBackedUp` olur. Collector geçmişinde base Full bulunmasa bile yeni Differential telemetry'si freshness sinyali olarak kabul edilir; restore chain geçerliliği ayrıca DBA/source sorumluluğundadır. `FULL`/`BULK_LOGGED` recovery modelinde log backup yaşı değerlendirilir; `SIMPLE` için log backup eksikliği üretilmez. `tempdb` `NotApplicable`, collection verisi bulunmayan durum `Unknown` olarak ele alınır.
 
-V029 ile `dbo.BackupPolicies` ve başlangıç Default policy oluşturulmuştur: full 24 saat, log 60 dakika, warning yüzde 80. Bunlar kurumsal SLA değildir; ileride policy yönetimi genişletilebilir. Kaynak `backup_start_date`/`backup_finish_date` alanları source-local semantics ile saklanır; otomatik UTC etiketi verilmez.
+V029 ile `dbo.BackupPolicies` ve başlangıç Default policy oluşturulmuştur: full 24 saat, differential 24 saat, log 60 dakika, warning yüzde 80. V052, differential freshness kuralını `usp_BackupProtection_List` ve `usp_ProtectionAvailability_Overview` içinde uygular. Bunlar kurumsal SLA değildir; ileride policy yönetimi genişletilebilir. Kaynak `backup_start_date`/`backup_finish_date` alanları source-local semantics ile saklanır; otomatik UTC etiketi verilmez.
 
 ## Always On
 

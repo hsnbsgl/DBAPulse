@@ -8,7 +8,7 @@ public sealed class OperationalEventCorrelator
 {
     private readonly long _blockingWarningMs, _blockingCriticalMs, _longWarningMs, _longCriticalMs;
     private readonly string _deadlockSeverity;
-    private readonly long _backupFullWarningMs, _backupFullCriticalMs, _backupLogWarningMs, _backupLogCriticalMs;
+    private readonly long _backupDataWarningMs, _backupDataCriticalMs, _backupLogWarningMs, _backupLogCriticalMs;
     public OperationalEventCorrelator(IConfiguration configuration)
     {
         _blockingWarningMs = Seconds(configuration, "DBAPULSE_BLOCKING_WARNING_SECONDS", 30);
@@ -17,8 +17,8 @@ public sealed class OperationalEventCorrelator
         _longCriticalMs = Seconds(configuration, "DBAPULSE_LONGRUNNING_CRITICAL_SECONDS", 300);
         var configuredSeverity = configuration["DBAPULSE_DEADLOCK_DEFAULT_SEVERITY"];
         _deadlockSeverity = configuredSeverity is "Info" or "Warning" or "Critical" ? configuredSeverity : "Warning";
-        _backupFullWarningMs = Seconds(configuration, "DBAPULSE_BACKUP_FULL_WARNING_HOURS", 19) * 3600;
-        _backupFullCriticalMs = Seconds(configuration, "DBAPULSE_BACKUP_FULL_CRITICAL_HOURS", 24) * 3600;
+        _backupDataWarningMs = Seconds(configuration, "DBAPULSE_BACKUP_FULL_WARNING_HOURS", 19) * 3600;
+        _backupDataCriticalMs = Seconds(configuration, "DBAPULSE_BACKUP_FULL_CRITICAL_HOURS", 24) * 3600;
         _backupLogWarningMs = Seconds(configuration, "DBAPULSE_BACKUP_LOG_WARNING_MINUTES", 45) * 60;
         _backupLogCriticalMs = Seconds(configuration, "DBAPULSE_BACKUP_LOG_CRITICAL_MINUTES", 60) * 60;
     }
@@ -41,15 +41,18 @@ public sealed class OperationalEventCorrelator
         foreach (var db in databases.Where(x => !x.DatabaseName.Equals("tempdb", StringComparison.OrdinalIgnoreCase) && x.DatabaseStatus.Equals("ONLINE", StringComparison.OrdinalIgnoreCase)))
         {
             var full = latest.TryGetValue($"{db.DatabaseName}|FULL", out var f) ? f.BackupFinish : null;
+            var differential = latest.TryGetValue($"{db.DatabaseName}|DIFFERENTIAL", out var d) ? d.BackupFinish : null;
             var log = latest.TryGetValue($"{db.DatabaseName}|LOG", out var l) ? l.BackupFinish : null;
-            var fullMinutes = full.HasValue ? Math.Max(0, (DateTime.UtcNow - full.Value).TotalMinutes) : double.MaxValue;
+            var dataBackup = full.HasValue && (!differential.HasValue || full.Value >= differential.Value) ? full : differential;
+            var dataBackupMinutes = dataBackup.HasValue ? Math.Max(0, (DateTime.UtcNow - dataBackup.Value).TotalMinutes) : double.MaxValue;
             var logMinutes = log.HasValue ? Math.Max(0, (DateTime.UtcNow - log.Value).TotalMinutes) : double.MaxValue;
-            var critical = !full.HasValue || fullMinutes * 60000 >= _backupFullCriticalMs || (db.RecoveryModel is "FULL" or "BULK_LOGGED" && (!log.HasValue || logMinutes * 60000 >= _backupLogCriticalMs));
-            var warning = !critical && (fullMinutes * 60000 >= _backupFullWarningMs || (db.RecoveryModel is "FULL" or "BULK_LOGGED" && logMinutes * 60000 >= _backupLogWarningMs));
+            var critical = !dataBackup.HasValue || dataBackupMinutes * 60000 >= _backupDataCriticalMs || (db.RecoveryModel is "FULL" or "BULK_LOGGED" && (!log.HasValue || logMinutes * 60000 >= _backupLogCriticalMs));
+            var warning = !critical && (dataBackupMinutes * 60000 >= _backupDataWarningMs || (db.RecoveryModel is "FULL" or "BULK_LOGGED" && logMinutes * 60000 >= _backupLogWarningMs));
             if (!critical && !warning) continue;
             var id = databaseIds.TryGetValue(db.DatabaseName, out var databaseId) ? databaseId : (int?)null;
             var fingerprint = Fingerprint("BackupProtection", serverId, id, "Default");
-            result.Add(new OperationalEventInput("BackupProtection", serverId, id, fingerprint, capturedAtUtc, capturedAtUtc, (long)Math.Max(0, fullMinutes * 60000), "Active", critical ? "Critical" : "Warning", 1, null, $"Backup protection on {db.DatabaseName}", full.HasValue ? $"Last full backup is {Math.Round(fullMinutes / 60, 1)} hours old." : "No full backup has been recorded.", null, null));
+            var backupType = differential.HasValue && (!full.HasValue || differential.Value > full.Value) ? "differential" : "full";
+            result.Add(new OperationalEventInput("BackupProtection", serverId, id, fingerprint, capturedAtUtc, capturedAtUtc, (long)Math.Max(0, dataBackupMinutes * 60000), "Active", critical ? "Critical" : "Warning", 1, null, $"Backup protection on {db.DatabaseName}", dataBackup.HasValue ? $"Last {backupType} backup is {Math.Round(dataBackupMinutes / 60, 1)} hours old." : "No full or differential backup has been recorded.", null, null));
         }
         return result;
     }
