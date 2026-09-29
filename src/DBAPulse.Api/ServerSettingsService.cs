@@ -89,7 +89,7 @@ public sealed class ServerSettingsService
 
     private static string NormalizeBackupMode(string value) => value.Trim().ToUpperInvariant() switch
     {
-        "AUTO" => "Auto",
+        "AUTO" => "Excluded",
         "REQUIRED" => "Required",
         "EXCLUDED" => "Excluded",
         _ => throw new ArgumentOutOfRangeException(nameof(value), "Backup mode must be Auto, Required or Excluded.")

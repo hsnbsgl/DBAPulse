@@ -2,6 +2,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using DBAPulse.Data;
+using DBAPulse.Domain;
 
 namespace DBAPulse.Api;
 
@@ -74,7 +75,8 @@ public sealed class AiSummaryService
         var detail = await _dashboard.GetServerDetailAsync(serverId, token);
         if (detail.Server is null) return new(true, settings.Provider, settings.Model, string.Empty, "Server not found.");
         var health = await _management.HealthAsync(serverId, null, token);
-        var prompt = $"You are a senior SQL Server operations assistant. Summarize the following server for an operator. Use Turkish with sections: Genel Durum, Riskler, Önerilen Aksiyonlar. Do not invent facts; explicitly say when data is unavailable. Provide a sufficiently detailed response based on the available data. Server: {JsonSerializer.Serialize(detail.Server)} Databases: {JsonSerializer.Serialize(detail.Databases)} Health signals: {JsonSerializer.Serialize(health)}";
+        var environment = await _management.ServerEnvironmentAsync(serverId, token);
+        var prompt = BuildPrompt(environment, detail, health);
         try
         {
             using var request = new HttpRequestMessage(HttpMethod.Post, Endpoint(settings));
@@ -105,7 +107,8 @@ public sealed class AiSummaryService
         var detail = await _dashboard.GetServerDetailAsync(serverId, token);
         if (detail.Server is null) { await WriteEventAsync(output, "error", "Server not found.", token); return; }
         var health = await _management.HealthAsync(serverId, null, token);
-        var prompt = $"You are a senior SQL Server operations assistant. Summarize the following server for an operator. Use Turkish with sections: Genel Durum, Riskler, Önerilen Aksiyonlar. Do not invent facts; explicitly say when data is unavailable. Provide a sufficiently detailed response based on the available data. Server: {JsonSerializer.Serialize(detail.Server)} Databases: {JsonSerializer.Serialize(detail.Databases)} Health signals: {JsonSerializer.Serialize(health)}";
+        var environment = await _management.ServerEnvironmentAsync(serverId, token);
+        var prompt = BuildPrompt(environment, detail, health);
         try
         {
             using var request = new HttpRequestMessage(HttpMethod.Post, Endpoint(settings, true));
@@ -145,6 +148,20 @@ public sealed class AiSummaryService
         var payload = $"event: {eventName}\ndata: {JsonSerializer.Serialize(data)}\n\n";
         await output.WriteAsync(Encoding.UTF8.GetBytes(payload), token);
         await output.FlushAsync(token);
+    }
+
+    private static string BuildPrompt(string environment, ServerDetailResult detail, IReadOnlyList<ManagementHealthRow> health)
+    {
+        var profile = environment.Trim().ToUpperInvariant() switch
+        {
+            "PROD" => (Name: "Production operations", Focus: "Önceliği availability, backup protection, blocking/deadlock, kapasite riski ve kullanıcı etkisine ver. Critical ve Warning durumlarını en başta belirt; aksiyonları güvenli, geri dönüşlü ve read-only gözlem sınırında öner."),
+            "STAGE" => (Name: "Pre-production readiness", Focus: "Önceliği production'a geçiş hazırlığına, production-benzeri workload risklerine, backup kapsamına, availability, job health, kapasite ve release öncesi açık noktalara ver."),
+            "TEST" => (Name: "Test and regression analysis", Focus: "Önceliği test sonucu güvenilirliğine, tekrar eden job/backup/performance sorunlarına, regression sinyallerine ve test verisinin beklenen davranıştan sapmasına ver. Non-production gürültüsünü production incident gibi sunma."),
+            "DEV" => (Name: "Development environment analysis", Focus: "Önceliği geliştirme kaynaklı blocking, başarısız job, veri/telemetry eksikliği, kapasite trendi ve geliştiricinin doğrulayabileceği teknik sorunlara ver. Development ortamı için production SLA veya incident iddiası üretme."),
+            _ => (Name: "General SQL Server operations", Focus: "Ortam bilinmiyorsa gözlenen telemetry'yi tarafsız biçimde özetle; ortam varsayımı veya business SLA üretme.")
+        };
+
+        return $"You are a senior SQL Server operations assistant. Analyze the server according to its environment. Environment: {environment}. Analysis profile: {profile.Name}. {profile.Focus} Use Turkish with sections: Genel Durum, Riskler, Önerilen Aksiyonlar. Do not invent facts; explicitly say when data is unavailable, stale or insufficient. Separate observed facts from recommendations. Do not recommend destructive or automatic actions such as KILL, failover, backup start, configuration change or data deletion. Provide a sufficiently detailed response based only on the available data. Server: {JsonSerializer.Serialize(detail.Server)} Databases: {JsonSerializer.Serialize(detail.Databases)} Health signals: {JsonSerializer.Serialize(health)}";
     }
 
     private static string? ExtractStreamText(JsonElement root, string protocol)

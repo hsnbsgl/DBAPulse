@@ -20,6 +20,15 @@ public sealed class ManagementReadStore
         await using var r=await Execute("dbo.usp_Management_Health",c=>{Add(c,"@ServerId",serverId);Add(c,"@DatabaseId",databaseId);},t); var list=new List<ManagementHealthRow>();
         while(await r.ReadAsync(t)) list.Add(new(S(r,"EntityType"),I(r,"ServerId"),NI(r,"DatabaseId"),S(r,"ServerName"),N(r,"DatabaseName"),S(r,"OverallStatus"),S(r,"PerformanceStatus"),S(r,"ProtectionStatus"),S(r,"AvailabilityStatus"),S(r,"CapacityStatus"),S(r,"AnomalyStatus"),S(r,"FreshnessStatus"),I(r,"ActiveCriticalCount"),I(r,"ActiveWarningCount"),I(r,"ActiveAttentionCount"),I(r,"RelatedSignalCount"))); return list;
     }
+    public async Task<string> ServerEnvironmentAsync(int serverId, CancellationToken t)
+    {
+        await using var connection = new SqlConnection(_connectionString);
+        await connection.OpenAsync(t);
+        await using var command = new SqlCommand("SELECT COALESCE(NULLIF(Environment,N''),N'Dev') FROM dbo.Servers WHERE Id=@ServerId", connection);
+        command.Parameters.AddWithValue("@ServerId", serverId);
+        var value = await command.ExecuteScalarAsync(t);
+        return Convert.ToString(value) ?? "Dev";
+    }
     private async Task<SqlDataReader> Execute(string name,Action<SqlCommand> add,CancellationToken t){var c=new SqlConnection(_connectionString);await c.OpenAsync(t);var cmd=new SqlCommand(name,c){CommandType=CommandType.StoredProcedure,CommandTimeout=60};add(cmd);return await cmd.ExecuteReaderAsync(CommandBehavior.CloseConnection,t);}
     private async Task<T> One<T>(string name,Action<SqlCommand> add,Func<SqlDataReader,T> map,CancellationToken t){await using var r=await Execute(name,add,t);return await r.ReadAsync(t)?map(r):throw new InvalidOperationException("Management procedure returned no row.");}
     private static void Add(SqlCommand c,string n,object? v)=>c.Parameters.AddWithValue(n,v??DBNull.Value);
