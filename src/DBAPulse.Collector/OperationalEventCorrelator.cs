@@ -46,8 +46,12 @@ public sealed class OperationalEventCorrelator
             var dataBackup = full.HasValue && (!differential.HasValue || full.Value >= differential.Value) ? full : differential;
             var dataBackupMinutes = dataBackup.HasValue ? Math.Max(0, (DateTime.UtcNow - dataBackup.Value).TotalMinutes) : double.MaxValue;
             var logMinutes = log.HasValue ? Math.Max(0, (DateTime.UtcNow - log.Value).TotalMinutes) : double.MaxValue;
-            var critical = !dataBackup.HasValue || dataBackupMinutes * 60000 >= _backupDataCriticalMs || (db.RecoveryModel is "FULL" or "BULK_LOGGED" && (!log.HasValue || logMinutes * 60000 >= _backupLogCriticalMs));
-            var warning = !critical && (dataBackupMinutes * 60000 >= _backupDataWarningMs || (db.RecoveryModel is "FULL" or "BULK_LOGGED" && logMinutes * 60000 >= _backupLogWarningMs));
+            var logBackupRequired = string.Equals(serverEnvironment, "Prod", StringComparison.OrdinalIgnoreCase)
+                                    && (db.RecoveryModel is "FULL" or "BULK_LOGGED");
+            var critical = !dataBackup.HasValue || dataBackupMinutes * 60000 >= _backupDataCriticalMs
+                           || (logBackupRequired && (!log.HasValue || logMinutes * 60000 >= _backupLogCriticalMs));
+            var warning = !critical && (dataBackupMinutes * 60000 >= _backupDataWarningMs
+                                        || (logBackupRequired && logMinutes * 60000 >= _backupLogWarningMs));
             if (!critical && !warning) continue;
             var id = databaseIds.TryGetValue(db.DatabaseName, out var databaseId) ? databaseId : (int?)null;
             var fingerprint = Fingerprint("BackupProtection", serverId, id, "Default");
