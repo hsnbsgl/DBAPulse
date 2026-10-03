@@ -1,0 +1,23 @@
+services:
+  mailpit:
+    image: axllent/mailpit:v1.21
+    container_name: dbapulse-mailpit
+    restart: unless-stopped
+    ports:
+      - "8025:8025"
+      - "1025:1025"
+
+  dbapulse-api:
+    depends_on:
+      - mailpit
+    environment:
+      DBAPULSE_SMTP_HOST: mailpit
+      DBAPULSE_SMTP_PORT: 1025
+      DBAPULSE_SMTP_SECURITY: none
+      DBAPULSE_SMTP_USERNAME: ""
+      DBAPULSE_SMTP_PASSWORD: ""
+      DBAPULSE_SMTP_FROM_EMAIL: dbapulse@localhost
+      DBAPULSE_SMTP_FROM_NAME: DBA Pulse Development
+      DBAPULSE_ALERT_ENABLED: "true"
+      DBAPULSE_ALERT_RECIPIENTS: dbapulse-alerts@localhost
+      DBAPULSE_ALERT_POLL_SECONDS: "10"

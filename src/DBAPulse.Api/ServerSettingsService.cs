@@ -3,8 +3,8 @@ using Microsoft.Data.SqlClient;
 
 namespace DBAPulse.Api;
 
-public sealed record ServerSetting(int ServerId, string ServerName, string InstanceName, string SqlVersion, string Edition, string Environment, bool IsActive, int CollectionIntervalMinutes, int CapacityIntervalMinutes, DateTime LastSeenAtUtc);
-public sealed record ServerSettingsUpdate(bool? IsActive, int? CollectionIntervalMinutes, int? CapacityIntervalMinutes, string? Environment);
+public sealed record ServerSetting(int ServerId, string ServerName, string InstanceName, string SqlVersion, string Edition, string Environment, bool IsActive, int CollectionIntervalMinutes, int CapacityIntervalMinutes, DateTime LastSeenAtUtc, string AlertRecipients, string AlertEventTypes, string AlertSeverities);
+public sealed record ServerSettingsUpdate(bool? IsActive, int? CollectionIntervalMinutes, int? CapacityIntervalMinutes, string? Environment, string? AlertRecipients, string? AlertEventTypes, string? AlertSeverities);
 public sealed record BackupScopeSetting(int DatabaseId, int ServerId, string ServerName, string DatabaseName, string DatabaseStatus, string RecoveryModel, string BackupProtectionMode, bool IsMirrored, string Environment);
 public sealed record BackupScopeUpdate(string Mode);
 
@@ -18,26 +18,32 @@ public sealed class ServerSettingsService
     }
     public async Task<IReadOnlyList<ServerSetting>> ListAsync(CancellationToken token)
     {
-        const string sql = "SELECT Id,ServerName,InstanceName,SqlVersion,Edition,Environment,IsActive,CollectionIntervalMinutes,CapacityIntervalMinutes,LastSeenAtUtc FROM dbo.Servers ORDER BY ServerName";
+        const string sql = "SELECT Id,ServerName,InstanceName,SqlVersion,Edition,Environment,IsActive,CollectionIntervalMinutes,CapacityIntervalMinutes,LastSeenAtUtc,ISNULL(AlertRecipients,N''),ISNULL(AlertEventTypes,N''),ISNULL(AlertSeverities,N'') FROM dbo.Servers ORDER BY ServerName";
         await using var connection = new SqlConnection(_connectionString); await connection.OpenAsync(token);
         await using var command = new SqlCommand(sql, connection); await using var reader = await command.ExecuteReaderAsync(token);
         var result = new List<ServerSetting>();
-        while (await reader.ReadAsync(token)) result.Add(new(reader.GetInt32(0), reader.GetString(1), reader.GetString(2), reader.GetString(3), reader.GetString(4), reader.GetString(5), reader.GetBoolean(6), reader.GetInt32(7), reader.GetInt32(8), reader.GetDateTime(9)));
+        while (await reader.ReadAsync(token)) result.Add(new(reader.GetInt32(0), reader.GetString(1), reader.GetString(2), reader.GetString(3), reader.GetString(4), reader.GetString(5), reader.GetBoolean(6), reader.GetInt32(7), reader.GetInt32(8), reader.GetDateTime(9), reader.GetString(10), reader.GetString(11), reader.GetString(12)));
         return result;
     }
     public async Task<bool> UpdateAsync(int id, ServerSettingsUpdate update, CancellationToken token)
     {
-        if (update.IsActive is null && update.CollectionIntervalMinutes is null && update.CapacityIntervalMinutes is null && update.Environment is null) return false;
+        if (update.IsActive is null && update.CollectionIntervalMinutes is null && update.CapacityIntervalMinutes is null && update.Environment is null && update.AlertRecipients is null && update.AlertEventTypes is null && update.AlertSeverities is null) return false;
         if (update.CollectionIntervalMinutes is < 1 or > 1440 || update.CapacityIntervalMinutes is < 1 or > 1440) throw new ArgumentOutOfRangeException(nameof(update), "Intervals must be between 1 and 1440 minutes.");
         var environment = update.Environment is null ? null : NormalizeEnvironment(update.Environment);
+        var alertRecipients = update.AlertRecipients is null ? null : NormalizeRecipients(update.AlertRecipients);
+        var alertEventTypes = update.AlertEventTypes is null ? null : NormalizeList(update.AlertEventTypes);
+        var alertSeverities = update.AlertSeverities is null ? null : NormalizeList(update.AlertSeverities);
         await using var connection = new SqlConnection(_connectionString); await connection.OpenAsync(token);
         await using var transaction = await connection.BeginTransactionAsync(token);
-        const string sql = "UPDATE dbo.Servers SET IsActive=COALESCE(@IsActive,IsActive), CollectionIntervalMinutes=COALESCE(@CollectionIntervalMinutes,CollectionIntervalMinutes), CapacityIntervalMinutes=COALESCE(@CapacityIntervalMinutes,CapacityIntervalMinutes), Environment=COALESCE(@Environment,Environment) WHERE Id=@Id";
+        const string sql = "UPDATE dbo.Servers SET IsActive=COALESCE(@IsActive,IsActive), CollectionIntervalMinutes=COALESCE(@CollectionIntervalMinutes,CollectionIntervalMinutes), CapacityIntervalMinutes=COALESCE(@CapacityIntervalMinutes,CapacityIntervalMinutes), Environment=COALESCE(@Environment,Environment), AlertRecipients=COALESCE(@AlertRecipients,AlertRecipients), AlertEventTypes=COALESCE(@AlertEventTypes,AlertEventTypes), AlertSeverities=COALESCE(@AlertSeverities,AlertSeverities) WHERE Id=@Id";
         await using var command = new SqlCommand(sql, connection, (SqlTransaction)transaction);
         command.Parameters.Add("@IsActive", SqlDbType.Bit).Value = (object?)update.IsActive ?? DBNull.Value;
         command.Parameters.Add("@CollectionIntervalMinutes", SqlDbType.Int).Value = (object?)update.CollectionIntervalMinutes ?? DBNull.Value;
         command.Parameters.Add("@CapacityIntervalMinutes", SqlDbType.Int).Value = (object?)update.CapacityIntervalMinutes ?? DBNull.Value;
         command.Parameters.Add("@Environment", SqlDbType.NVarChar, 20).Value = (object?)environment ?? DBNull.Value;
+        command.Parameters.Add("@AlertRecipients", SqlDbType.NVarChar, 4000).Value = (object?)alertRecipients ?? DBNull.Value;
+        command.Parameters.Add("@AlertEventTypes", SqlDbType.NVarChar, 1000).Value = (object?)alertEventTypes ?? DBNull.Value;
+        command.Parameters.Add("@AlertSeverities", SqlDbType.NVarChar, 100).Value = (object?)alertSeverities ?? DBNull.Value;
         command.Parameters.Add("@Id", SqlDbType.Int).Value = id;
         var changed = await command.ExecuteNonQueryAsync(token);
         if (changed > 0 && update.IsActive.HasValue)
@@ -86,6 +92,14 @@ public sealed class ServerSettingsService
         "PROD" => "Prod",
         _ => throw new ArgumentOutOfRangeException(nameof(value), "Environment must be Dev, Test, Stage or Prod.")
     };
+
+    private static string NormalizeRecipients(string value) => string.Join(",", value
+        .Split(new[] { ',', ';', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+        .Distinct(StringComparer.OrdinalIgnoreCase));
+
+    private static string NormalizeList(string value) => string.Join(",", value
+        .Split(new[] { ',', ';', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+        .Distinct(StringComparer.OrdinalIgnoreCase));
 
     private static string NormalizeBackupMode(string value) => value.Trim().ToUpperInvariant() switch
     {

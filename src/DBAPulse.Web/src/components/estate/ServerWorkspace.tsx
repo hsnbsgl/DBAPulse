@@ -35,6 +35,8 @@ type Job = { id: number; jobName: string; enabled: boolean; lastRunStatus: strin
 type Blocking = { id: number; capturedAtUtc: string; serverName: string; databaseName?: string; sessionId: number; blockingSessionId: number; waitType?: string; waitDurationMs: number; applicationName?: string };
 type Deadlock = { id: number; occurredAtUtc: string; serverName: string; databaseName?: string; processCount: number; victimProcessId?: string };
 type LongRunning = { id: number; capturedAtUtc: string; serverName: string; databaseName?: string; sessionId: number; elapsedMs: number; status?: string; waitType?: string; applicationName?: string };
+type LiveRequest = { sessionId: number; blockingSessionId?: number; databaseName?: string; status: string; command: string; cpuTimeMs: number; elapsedMs: number; waitType?: string; waitTimeMs: number; loginName?: string; hostName?: string; applicationName?: string; startTimeUtc: string; sqlText?: string };
+type LiveConnectionsSnapshot = { activeConnectionCount: number; distinctApplicationCount: number; applications: Array<{ applicationName: string; connectionCount: number }> };
 type OperationalEvent = { id: number; eventType: string; serverName: string; databaseName?: string; startedAtUtc: string; lastSeenAtUtc: string; status: string; severity: string; durationMs: number; title: string };
 type Anomaly = { id: number; metricType: string; databaseName?: string; entityKey?: string; observedAtUtc: string; observedValue: number; baselineMedian: number; baselineP95: number; deviationRatio?: number; modifiedZScore?: number; baselineScope: string; sampleCount: number; severity: string; status: string; explanationCode: string; startedAtUtc: string; lastSeenAtUtc: string };
 type ManagementAttention = { id: number; severity: string; domain: string; issue: string; explanationCode: string; databaseName?: string; status: string };
@@ -219,6 +221,21 @@ function ServerSummary({ data }: { data: WorkspaceData }) {
   const databaseHealth = chartCounts(data.server.databases.map(x => x.databaseStatus));
   const sizedDatabases = data.capacity.items.filter(x => Number.isFinite(x.currentTotalSizeMb)).sort((left, right) => right.currentTotalSizeMb - left.currentTotalSizeMb);
   const [chartPage, setChartPage] = useState(1);
+  const [connections, setConnections] = useState<LiveConnectionsSnapshot>();
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const value = await get<LiveConnectionsSnapshot>(`/live/connections?serverId=${data.server.server.serverId}`);
+        if (!cancelled) setConnections(value);
+      } catch {
+        if (!cancelled) setConnections(undefined);
+      }
+    };
+    void load();
+    const timer = window.setInterval(() => { void load(); }, 15_000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [data.server.server.serverId]);
   useEffect(() => setChartPage(1), [data.capacity.items]);
   const sizedPage = sizedDatabases.slice((chartPage - 1) * chartPageSize, chartPage * chartPageSize);
   return <Stack spacing={2}>
@@ -227,6 +244,8 @@ function ServerSummary({ data }: { data: WorkspaceData }) {
       <KpiCard title="Backup Risk" value={backupRisk} subtitle="Warning / Critical / Never backed up" tone={backupRisk ? 'warning' : 'success'} />
       <KpiCard title="Failed Jobs" value={failedJobs} subtitle="Latest job state" tone={failedJobs ? 'error' : 'success'} />
       <KpiCard title="Active Events" value={activeEvents} subtitle="Operational events" tone={activeEvents ? 'warning' : 'success'} />
+      <KpiCard title="Active Connections" value={connections?.activeConnectionCount ?? '—'} subtitle="Live user sessions" tone="info" />
+      <KpiCard title="Applications" value={connections?.distinctApplicationCount ?? '—'} subtitle="Distinct live applications" tone="info" />
     </Box>
     <Paper className="panel">
       <Typography variant="h6">Server Information</Typography>
@@ -240,6 +259,7 @@ function ServerSummary({ data }: { data: WorkspaceData }) {
         <Typography>Capacity Telemetry<br /><b>{data.capacity.items.length} database rows</b></Typography>
       </Box>
     </Paper>
+    <Paper className="panel"><Stack direction="row" justifyContent="space-between" alignItems="center"><Box><Typography variant="h6">Connections by Application</Typography><Typography variant="caption" color="text.secondary">Live source query · refreshes every 15 seconds</Typography></Box><Typography variant="caption" color="text.secondary">{connections ? `${connections.activeConnectionCount} connections · ${connections.distinctApplicationCount} applications` : 'Loading…'}</Typography></Stack><Divider sx={{ my: 1.5 }} />{connections?.applications.length ? <HorizontalBarChart labels={connections.applications.slice(0, 10).map(row => row.applicationName)} values={connections.applications.slice(0, 10).map(row => row.connectionCount)} valueName="Connections" color={chartColors.info} height={Math.max(240, Math.min(420, connections.applications.slice(0, 10).length * 36 + 80))} /> : <Typography color="text.secondary">Live connection data is not available.</Typography>}</Paper>
     <Box className="two-col">
       <Paper className="panel"><Typography variant="h6">Database Health</Typography><Divider sx={{ my: 1.5 }} /><DonutChart items={databaseHealth} height={260} /></Paper>
       <Paper className="panel"><Typography variant="h6">Database Size</Typography><Divider sx={{ my: 1.5 }} />{sizedDatabases.length ? <><Box sx={{ width: '100%', mr: 'auto' }}><HorizontalBarChart labels={sizedPage.map(x => x.databaseName)} values={sizedPage.map(x => x.currentTotalSizeMb)} valueName="Size (MB)" color={chartColors.info} height={Math.max(220, Math.min(420, sizedPage.length * 34 + 70))} /></Box><ChartPager page={chartPage} total={sizedDatabases.length} onChange={setChartPage} /></> : <EmptyState title="No capacity chart data" description="Database size telemetry is not available for this server." />}</Paper>
@@ -303,6 +323,27 @@ function AiSummaryTab({ serverId }: { serverId: number }) {
   </Paper></Stack>;
 }
 
+function LiveOperationsPanel({ serverId }: { serverId: number }) {
+  const [rows, setRows] = useState<LiveRequest[]>([]);
+  const [error, setError] = useState('');
+  const [updatedAt, setUpdatedAt] = useState<Date>();
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const value = await get<LiveRequest[]>(`/live/requests?serverId=${serverId}`);
+        if (!cancelled) { setRows(value); setError(''); setUpdatedAt(new Date()); }
+      } catch (exception) {
+        if (!cancelled) setError(exception instanceof Error ? exception.message : String(exception));
+      }
+    };
+    void load();
+    const timer = window.setInterval(() => { void load(); }, 15_000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [serverId]);
+  return <Paper className="panel"><Stack direction="row" justifyContent="space-between" alignItems="center"><Box><Typography variant="h6">Live Operations</Typography><Typography variant="caption" color="text.secondary">Direct source query · refreshes every 15 seconds{updatedAt ? ` · ${updatedAt.toLocaleTimeString()}` : ''}</Typography></Box><Chip label={`${rows.length} active`} color={rows.length ? 'warning' : 'success'} variant="outlined" /></Stack><Divider sx={{ my: 1.5 }} />{error ? <Alert severity="info">Live data unavailable: {error}</Alert> : rows.length ? <Table size="small"><TableHead><TableRow><TableCell>Session</TableCell><TableCell>Database</TableCell><TableCell>Status / Command</TableCell><TableCell>Elapsed</TableCell><TableCell>Wait</TableCell><TableCell>Application</TableCell></TableRow></TableHead><TableBody>{rows.map(row => <TableRow key={row.sessionId}><TableCell>{row.sessionId}{row.blockingSessionId ? ` · blocked by ${row.blockingSessionId}` : ''}</TableCell><TableCell>{row.databaseName || 'N/A'}</TableCell><TableCell>{row.status} · {row.command}</TableCell><TableCell>{row.elapsedMs.toLocaleString()} ms</TableCell><TableCell>{row.waitType ? `${row.waitType} · ${row.waitTimeMs.toLocaleString()} ms` : '—'}</TableCell><TableCell>{row.applicationName || row.hostName || row.loginName || 'N/A'}</TableCell></TableRow>)}</TableBody></Table> : <Typography color="text.secondary">No active requests.</Typography>}</Paper>;
+}
+
 function PerformanceTab({ data }: { data: WorkspaceData }) {
   const blockingByWait = Array.from(data.blocking.reduce((counts, row) => counts.set(row.waitType || 'Unknown', (counts.get(row.waitType || 'Unknown') || 0) + 1), new Map<string, number>()).entries()).sort((a, b) => b[1] - a[1]);
   const longRunningRows = data.longRunning.slice().sort((a, b) => b.elapsedMs - a.elapsedMs).slice(0, 10);
@@ -310,7 +351,7 @@ function PerformanceTab({ data }: { data: WorkspaceData }) {
   const [blockingSort, setBlockingSort] = useState<SortState>({ key: 'capturedAtUtc', direction: 'desc' });
   const sortedBlocking = useMemo(() => sortRows(data.blocking, blockingSort, (row, key) => row[key as keyof Blocking]), [data.blocking, blockingSort]);
   const onBlockingSort = (key: string) => setBlockingSort(current => toggleSort(current, key));
-  return <Stack spacing={2}>
+  return <Stack spacing={2}><LiveOperationsPanel serverId={data.server.server.serverId} />
     <Box className="metric-grid"><KpiCard title="Blocking" value={data.blocking.length} tone={data.blocking.length ? 'warning' : 'success'} /><KpiCard title="Deadlocks" value={data.deadlocks.length} tone={data.deadlocks.length ? 'error' : 'success'} /><KpiCard title="Long Running" value={data.longRunning.length} tone={data.longRunning.length ? 'warning' : 'success'} /></Box>
     {(blockingByWait.length > 0 || longRunningRows.length > 0 || deadlockByDatabase.length > 0) && <Box className="two-col">
       <Paper className="panel"><Typography variant="h6">Blocking by Wait Type</Typography><Divider sx={{ my: 1.5 }} />{blockingByWait.length ? <HorizontalBarChart labels={blockingByWait.map(([label]) => label)} values={blockingByWait.map(([, value]) => value)} valueName="Observations" color={chartColors.warning} height={Math.max(220, Math.min(360, blockingByWait.length * 38 + 70))} /> : <EmptyState title="No blocking observations" description="Zero is a real observation for this server." />}</Paper>
@@ -397,25 +438,42 @@ export default function ServerWorkspace({ serverId, onDatabase, onBack, fullPage
   useEffect(() => {
     let cancelled = false;
     setData(undefined); setError('');
-    Promise.all([
-      get<ServerDetail>(`/servers/${serverId}`),
-      get<Page<CapacityDb>>(`/capacity/databases?serverId=${serverId}&page=1&pageSize=100`),
-      get<Page<Volume>>(`/capacity/volumes?serverId=${serverId}&page=1&pageSize=100`),
-      get<Page<Backup>>(`/protection/backups?serverId=${serverId}&page=1&pageSize=100`),
-      get<Page<AlwaysOn>>(`/availability/alwayson?serverId=${serverId}&page=1&pageSize=100`),
-      get<Page<Job>>(`/jobs?serverId=${serverId}&page=1&pageSize=100`),
-      get<Blocking[]>('/performance/blocking?hours=24'),
-      get<Deadlock[]>('/performance/deadlocks?hours=24'),
-      get<LongRunning[]>('/performance/long-running?hours=24'),
-      get<Page<OperationalEvent>>(`/operations/events?serverId=${serverId}&page=1&pageSize=100`),
-      get<Page<Anomaly>>(`/anomalies?serverId=${serverId}&page=1&pageSize=100`),
-      get<ManagementHealth[]>('/management/health').catch(() => [] as ManagementHealth[]),
-      get<Page<ManagementAttention>>(`/management/attention?serverId=${serverId}&page=1&pageSize=100`).catch(() => ({ items: [], totalCount: 0 } as Page<ManagementAttention>)),
-    ]).then(([server, capacity, volumes, backups, alwaysOn, jobs, blocking, deadlocks, longRunning, operations, anomalies, healthRows, attention]) => {
+    // Load the server identity first so the workspace can render immediately.
+    // The heavier telemetry panels are hydrated in the background below.
+    get<ServerDetail>(`/servers/${serverId}`).then(server => {
       if (cancelled) return;
+      setData({
+        server,
+        serverAttention: [],
+        capacity: { items: [], totalCount: 0 },
+        volumes: { items: [], totalCount: 0 },
+        backups: { items: [], totalCount: 0 },
+        alwaysOn: { items: [], totalCount: 0 },
+        jobs: { items: [], totalCount: 0 },
+        blocking: [], deadlocks: [], longRunning: [],
+        operations: { items: [], totalCount: 0 },
+        anomalies: { items: [], totalCount: 0 },
+      });
+
       const serverName = server.server.serverName;
-      const serverHealth = healthRows.find(row => row.entityType === 'Server' && row.serverId === serverId);
-      setData({ server, serverHealth, serverAttention: attention.items, capacity, volumes, backups, alwaysOn, jobs, blocking: blocking.filter(x => x.serverName === serverName), deadlocks: deadlocks.filter(x => x.serverName === serverName), longRunning: longRunning.filter(x => x.serverName === serverName), operations, anomalies });
+      Promise.all([
+        get<Page<CapacityDb>>(`/capacity/databases?serverId=${serverId}&page=1&pageSize=100`),
+        get<Page<Volume>>(`/capacity/volumes?serverId=${serverId}&page=1&pageSize=100`),
+        get<Page<Backup>>(`/protection/backups?serverId=${serverId}&page=1&pageSize=100`),
+        get<Page<AlwaysOn>>(`/availability/alwayson?serverId=${serverId}&page=1&pageSize=100`),
+        get<Page<Job>>(`/jobs?serverId=${serverId}&page=1&pageSize=100`),
+        get<Blocking[]>('/performance/blocking?hours=24'),
+        get<Deadlock[]>('/performance/deadlocks?hours=24'),
+        get<LongRunning[]>('/performance/long-running?hours=24'),
+        get<Page<OperationalEvent>>(`/operations/events?serverId=${serverId}&page=1&pageSize=100`),
+        get<Page<Anomaly>>(`/anomalies?serverId=${serverId}&page=1&pageSize=100`),
+        get<ManagementHealth[]>('/management/health').catch(() => [] as ManagementHealth[]),
+        get<Page<ManagementAttention>>(`/management/attention?serverId=${serverId}&page=1&pageSize=100`).catch(() => ({ items: [], totalCount: 0 } as Page<ManagementAttention>)),
+      ]).then(([capacity, volumes, backups, alwaysOn, jobs, blocking, deadlocks, longRunning, operations, anomalies, healthRows, attention]) => {
+        if (cancelled) return;
+        const serverHealth = healthRows.find(row => row.entityType === 'Server' && row.serverId === serverId);
+        setData(current => current ? { ...current, serverHealth, serverAttention: attention.items, capacity, volumes, backups, alwaysOn, jobs, blocking: blocking.filter(x => x.serverName === serverName), deadlocks: deadlocks.filter(x => x.serverName === serverName), longRunning: longRunning.filter(x => x.serverName === serverName), operations, anomalies } : current);
+      }).catch(errorValue => { if (!cancelled) setError(errorValue.message); });
     }).catch(errorValue => { if (!cancelled) setError(errorValue.message); });
     return () => { cancelled = true; };
   }, [serverId]);

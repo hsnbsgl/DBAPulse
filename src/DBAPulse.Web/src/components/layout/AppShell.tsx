@@ -12,7 +12,7 @@ import FactCheckIcon from '@mui/icons-material/FactCheck';
 import LightModeIcon from '@mui/icons-material/LightMode';
 import DarkModeIcon from '@mui/icons-material/DarkMode';
 import SettingsIcon from '@mui/icons-material/Settings';
-import tskbLogo from '../../assets/tskb-logo.svg';
+import sqlServerLogo from '../../assets/sql-server-logo.svg';
 
 type NavItem = { key: string; label: string; icon: ReactNode; target?: string };
 const nav: NavItem[] = [
@@ -51,9 +51,9 @@ export function useServerFilter() {
   return context;
 }
 
-function TskbLogo() {
-  return <Box className="tskb-logo" aria-hidden="true">
-    <Box component="img" className="tskb-logo-image" src={tskbLogo} alt="TSKB" />
+function SqlServerLogo() {
+  return <Box className="sqlserver-logo" aria-hidden="true">
+    <Box component="img" className="sqlserver-logo-image" src={sqlServerLogo} alt="SQL Server" />
   </Box>;
 }
 function ServerSelector({ servers, value, onChange }: { servers: SidebarServer[]; value: number; onChange: (serverId: number) => void }) {
@@ -96,7 +96,7 @@ export default function AppShell({ activeView, onNavigate, onServerSelect, theme
       <Chip size="small" label="Europe/Istanbul" variant="outlined" />
       <Tooltip title={themeMode === 'dark' ? 'Açık temaya geç' : 'Koyu temaya geç'}><IconButton className="theme-toggle" size="small" onClick={onToggleTheme} aria-label={themeMode === 'dark' ? 'Açık temaya geç' : 'Koyu temaya geç'}>{themeMode === 'dark' ? <LightModeIcon fontSize="small" /> : <DarkModeIcon fontSize="small" />}</IconButton></Tooltip><Typography className="identity-label">anonymous</Typography>
     </Toolbar></AppBar>
-    <Drawer variant="permanent" className="drawer"><ButtonBase className="drawer-brand" onClick={() => onNavigate('dashboard')} aria-label="TSKB ana ekrana dön"><TskbLogo /></ButtonBase>
+    <Drawer variant="permanent" className="drawer"><ButtonBase className="drawer-brand" onClick={() => onNavigate('dashboard')} aria-label="SQL Server ana ekrana dön"><SqlServerLogo /></ButtonBase>
       <List className="nav-list">{nav.map(item => item.key === 'estate' ? <Box key={item.key} className="estate-nav-group"><ListItemButton className="estate-nav-item" selected={active === item.key || active === 'dashboard'} onClick={() => { onNavigate(item.target || item.key); setServersOpen(open => !open); }}><ListItemIcon>{item.icon}</ListItemIcon><ListItemText primary={item.label} /><Box className="nav-expand-icon">{serversOpen ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}</Box></ListItemButton><Collapse in={serversOpen} timeout="auto" unmountOnExit><List component="div" disablePadding className="server-nav-sublist">{servers.map(server => <ListItemButton key={server.serverId} className="server-nav-item" onClick={() => { setSelectedServerId(server.serverId); onServerSelect?.(server.serverId); }}><ListItemIcon><Box component="span" className={`server-health-led server-health-${healthTone(server.healthStatus)}`} title={`${server.serverName}: ${server.healthStatus}`} aria-label={`${server.serverName}: ${server.healthStatus}`} /></ListItemIcon><ListItemText primary={server.serverName} secondary={`${server.healthStatus} · ${server.databaseCount} DB`} /></ListItemButton>)}</List></Collapse></Box> : <ListItemButton key={item.key} selected={active === item.key} onClick={() => onNavigate(item.target || item.key)}><ListItemIcon>{item.icon}</ListItemIcon><ListItemText primary={item.label} /></ListItemButton>)}</List>
     </Drawer>
     <Box component="main" className="main"><Box className="content">{children}</Box></Box>

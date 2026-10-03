@@ -67,6 +67,43 @@ Ana servisler:
 - `dbapulse-web`: HTTPS frontend
 - `dbapulse-ollama`: yalnızca local LLM seçilirse oluşturulur
 
+Mailpit ana compose dosyasında bulunmaz. Lokal development SMTP testleri için ayrı katmanı kullanın:
+
+```bash
+docker compose -f docker-compose.phase2.yml -f docker-compose.dev.yml up -d --build
+```
+
+Mailpit web arayüzü `http://localhost:8025`, SMTP portu `1025` üzerinden açılır. Bu katman yalnızca
+development içindir; production veya normal compose çalıştırmasında kullanılmamalıdır.
+
+Alarm worker aktif `Warning` ve `Critical` operational event’leri tarar, başarılı gönderimleri
+`dbo.AlertNotificationDeliveries` tablosunda tutar ve aynı event için tekrar mail göndermez.
+Development ortamında alarmlar Mailpit arayüzünde görülür.
+
+Server Telemetry ekranı sunucu özetini önce gösterir; kapasite, backup, performance, Always On,
+job, operasyon ve anomaly verileri arka planda yüklenir. İlk açılıştan sonra bu bölümlerin kısa
+bir süre içinde güncellenmesi normaldir.
+
+Performance sekmesindeki **Live Operations** paneli aktif SQL request ve blocking verisini kaynak
+SQL Server’dan doğrudan okur ve yaklaşık 15 saniyede bir yeniler. Bu özellik için API’nin
+`DBAPULSE_SOURCE_CONNECTION` ayarı ve kaynak login üzerinde `VIEW SERVER STATE` (SQL Server 2019
+ve öncesi) veya `VIEW SERVER PERFORMANCE STATE` (SQL Server 2022+) yetkisi gerekir.
+Yetki yoksa snapshot tabanlı performance listeleri çalışmaya devam eder; canlı panel bilgi mesajı
+gösterir.
+
+Server Overview ekranındaki canlı connection kartları aktif connection sayısını, distinct
+application sayısını ve application bazlı connection grafiğini aynı kaynaktan gösterir.
+
+Çoklu sunucu canlı erişimi için `.env` içinde server ID’lerini kaynak bağlantılarına eşleyin:
+
+```env
+DBAPULSE_LIVE_SOURCE_CONNECTIONS={"1":"Server=sql01,1433;Database=master;User Id=DBA_PULSE;Password=***;Encrypt=False;TrustServerCertificate=True;","2":"Server=sql02,1433;Database=master;User Id=DBA_PULSE;Password=***;Encrypt=False;TrustServerCertificate=True;"}
+```
+
+JSON anahtarları `DBA_PULSE.dbo.Servers.Id` değerleridir. Her kaynak login için
+Uygun `VIEW SERVER STATE` veya `VIEW SERVER PERFORMANCE STATE` yetkisi verilmelidir. Secret içeren
+`.env` dosyası Git’e gönderilmemelidir.
+
 ## Portlar
 
 | Host portu | Container portu | Kullanım |
@@ -103,6 +140,20 @@ curl -k https://localhost:8443/api/health
 ```
 
 Özel HTTPS portu kullanıldıysa `8443` yerine seçilen portu yazın. Tarayıcıda self-signed sertifika uyarısı görülmesi beklenir.
+
+Server Telemetry verileri görünmüyorsa servisleri ve son toplama döngüsünü kontrol edin:
+
+```bash
+docker compose -f docker-compose.phase2.yml ps
+docker compose -f docker-compose.phase2.yml logs --tail=100 dbapulse-api dbapulse-collector
+```
+
+API veya collector yeniden oluşturulduktan sonra web proxy DNS kaydı eski container adresini
+gösteriyorsa web servisini de yeniden oluşturun:
+
+```bash
+docker compose -f docker-compose.phase2.yml up -d dbapulse-web
+```
 
 ## Yeni SQL Server ekleme
 

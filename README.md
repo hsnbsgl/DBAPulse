@@ -57,6 +57,39 @@ Her iki script de kurulumu Docker çalışan mevcut makineye yapar; SQL Server u
 
 Self-signed sertifika tarayıcıda ilk kullanımda uyarı gösterebilir.
 
+## Server Telemetry ekranı
+
+Server detayına girildiğinde sunucu kimliği önce yüklenir ve ekran hızlıca açılır. Kapasite,
+backup, performance, Always On, job, operasyon ve anomaly telemetry verileri arka planda
+yüklenir; bu nedenle özet ekranı açıldıktan sonra kartların ve sekmelerin birkaç saniye içinde
+dolması beklenir.
+
+Collector toplama döngüsü ile UI sorguları birbirinden bağımsızdır. Toplama durumunu görmek için:
+
+```bash
+docker compose -f docker-compose.phase2.yml logs --tail=100 dbapulse-collector
+```
+
+Server yeniden oluşturulduktan sonra web proxy eski API adresini kullanıyorsa web container’ını
+da yeniden oluşturun:
+
+```bash
+docker compose -f docker-compose.phase2.yml up -d dbapulse-web
+```
+
+Performance sekmesindeki **Live Operations** paneli kaynak SQL Server’a doğrudan bağlanır,
+aktif request/blocking verisini yaklaşık 15 saniyede bir yeniler. Bu panel için API container’ına
+`DBAPULSE_SOURCE_CONNECTION` verilmesi gerekir; bağlantı hesabının `VIEW SERVER STATE` yetkisi
+olmalıdır (`VIEW SERVER STATE` veya SQL Server 2022+ için `VIEW SERVER PERFORMANCE STATE`).
+Tek sunuculu kurulumda bu bağlantı ilk sunucu için kullanılır. Çoklu sunucu canlı
+erişimi için `DBAPULSE_LIVE_SOURCE_CONNECTIONS` değişkenine server ID → connection string JSON
+eşlemesi eklenir; örneğin `{"1":"Server=sql01,1433;...","2":"Server=sql02,1433;..."}`.
+Diğer grafik ve listeler collector snapshot’larından beslenir.
+
+Server Overview ekranında ayrıca canlı aktif connection sayısı, distinct application sayısı ve
+application adına göre connection dağılım grafiği gösterilir. Bu metrikler de yaklaşık 15 saniyede
+bir yenilenir.
+
 ## Migration ve veritabanı
 
 Collector başlarken `database/migrations` altındaki `V*.sql` dosyalarını sürüm sırasıyla çalıştırır. Uygulanan sürümler `dbo.SchemaVersions` tablosunda tutulur ve tekrar çalıştırılmaz. Manuel migration komutu gerekmez.
@@ -96,6 +129,28 @@ docker exec dbapulse-ollama ollama ps
 ```
 
 Son komut yalnızca local LLM kurulmuşsa kullanılmalıdır.
+
+### Lokal development için Mailpit
+
+Mailpit varsayılan compose dosyasına dahil değildir. Yalnızca lokal geliştirme ve SMTP alarm
+testleri için development compose katmanıyla başlatılır:
+
+```bash
+docker compose -f docker-compose.phase2.yml -f docker-compose.dev.yml up -d --build
+```
+
+- Mailpit arayüzü: http://localhost:8025
+- SMTP: `localhost:1025`
+
+Development alarm ayarları aktif `Warning` ve `Critical` operational event’leri 10 saniyede bir
+kontrol eder ve aynı event için yalnızca bir kez e-posta gönderir. Mesajlar Mailpit arayüzünde
+görüntülenir. Normal compose kullanımında alıcı tanımlı değilse alarm gönderimi pasif kalır.
+
+Kapatmak için development katmanını da belirterek çalıştırın:
+
+```bash
+docker compose -f docker-compose.phase2.yml -f docker-compose.dev.yml down
+```
 
 ## Güvenlik
 
