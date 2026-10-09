@@ -128,6 +128,15 @@ docker compose -f docker-compose.phase2.yml up -d --build
 docker exec dbapulse-ollama ollama ps
 ```
 
+Linux üzerinde kodu, ana yapıyı ve tüm sunucu collector'larını birlikte güncellemek için proje kökünde:
+
+```bash
+chmod +x scripts/update.sh
+./scripts/update.sh
+```
+
+Script, `main` branch'ini fast-forward günceller; migration'lar collector'lar başlarken otomatik uygulanır.
+
 Son komut yalnızca local LLM kurulmuşsa kullanılmalıdır.
 
 ### Lokal development için Mailpit
