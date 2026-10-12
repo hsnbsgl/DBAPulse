@@ -58,11 +58,14 @@ const fetchCallsFor = (mock: ReturnType<typeof vi.fn>, path: string) =>
 
 describe('ServerWorkspace tab refresh', () => {
   let fetchMock: ReturnType<typeof vi.fn>;
+  let failingPath: string | undefined;
 
   beforeEach(() => {
+    failingPath = undefined;
     fetchMock = vi.fn(async (request: RequestInfo | URL) => {
       const requestUrl = new URL(String(request), 'http://localhost');
       const path = requestUrl.pathname.replace(/^\/api/, '') + requestUrl.search;
+      if (path === failingPath) return { ok: false, json: async () => ({}) };
       return { ok: true, json: async () => responseFor(path) };
     });
     vi.stubGlobal('fetch', fetchMock);
@@ -124,5 +127,16 @@ describe('ServerWorkspace tab refresh', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Always On' }));
 
     await waitFor(() => expect(fetchCallsFor(fetchMock, '/availability/alwayson?serverId=1&page=1&pageSize=100')).toHaveLength(3));
+  });
+
+  it('keeps the workspace visible when a background list refresh fails', async () => {
+    render(<ServerWorkspace serverId={1} onDatabase={() => undefined} />);
+    await screen.findByRole('tab', { name: 'Always On' });
+    failingPath = '/performance/blocking?hours=24';
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Performance' }));
+
+    await waitFor(() => expect(screen.getByText(/Some server telemetry could not be refreshed/)).toBeTruthy());
+    expect(screen.getByRole('tab', { name: 'Performance' })).toBeTruthy();
   });
 });

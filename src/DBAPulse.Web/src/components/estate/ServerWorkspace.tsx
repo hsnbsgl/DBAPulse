@@ -445,11 +445,12 @@ export default function ServerWorkspace({ serverId, onDatabase, onBack, fullPage
   const [data, setData] = useState<WorkspaceData>();
   const [tab, setTab] = useState(0);
   const [error, setError] = useState('');
+  const [refreshError, setRefreshError] = useState('');
   const panelRoot = useRef<HTMLDivElement>(null);
   useResizablePanels(panelRoot, serverId, tab, Boolean(data));
   useEffect(() => {
     let cancelled = false;
-    setData(undefined); setError('');
+    setData(undefined); setError(''); setRefreshError('');
     // Load the server identity first so the workspace can render immediately.
     // The heavier telemetry panels are hydrated in the background below.
     get<ServerDetail>(`/servers/${serverId}`).then(server => {
@@ -469,16 +470,16 @@ export default function ServerWorkspace({ serverId, onDatabase, onBack, fullPage
 
       const serverName = server.server.serverName;
       Promise.all([
-        get<Page<CapacityDb>>(`/capacity/databases?serverId=${serverId}&page=1&pageSize=100`),
-        get<Page<Volume>>(`/capacity/volumes?serverId=${serverId}&page=1&pageSize=100`),
-        get<Page<Backup>>(`/protection/backups?serverId=${serverId}&page=1&pageSize=100`),
-        get<Page<AlwaysOn>>(`/availability/alwayson?serverId=${serverId}&page=1&pageSize=100`),
-        get<Page<Job>>(`/jobs?serverId=${serverId}&page=1&pageSize=100`),
-        get<Blocking[]>('/performance/blocking?hours=24'),
-        get<Deadlock[]>('/performance/deadlocks?hours=24'),
-        get<LongRunning[]>('/performance/long-running?hours=24'),
-        get<Page<OperationalEvent>>(`/operations/events?serverId=${serverId}&page=1&pageSize=100`),
-        get<Page<Anomaly>>(`/anomalies?serverId=${serverId}&page=1&pageSize=100`),
+        get<Page<CapacityDb>>(`/capacity/databases?serverId=${serverId}&page=1&pageSize=100`).catch(() => ({ items: [], totalCount: 0 })),
+        get<Page<Volume>>(`/capacity/volumes?serverId=${serverId}&page=1&pageSize=100`).catch(() => ({ items: [], totalCount: 0 })),
+        get<Page<Backup>>(`/protection/backups?serverId=${serverId}&page=1&pageSize=100`).catch(() => ({ items: [], totalCount: 0 })),
+        get<Page<AlwaysOn>>(`/availability/alwayson?serverId=${serverId}&page=1&pageSize=100`).catch(() => ({ items: [], totalCount: 0 })),
+        get<Page<Job>>(`/jobs?serverId=${serverId}&page=1&pageSize=100`).catch(() => ({ items: [], totalCount: 0 })),
+        get<Blocking[]>('/performance/blocking?hours=24').catch(() => []),
+        get<Deadlock[]>('/performance/deadlocks?hours=24').catch(() => []),
+        get<LongRunning[]>('/performance/long-running?hours=24').catch(() => []),
+        get<Page<OperationalEvent>>(`/operations/events?serverId=${serverId}&page=1&pageSize=100`).catch(() => ({ items: [], totalCount: 0 })),
+        get<Page<Anomaly>>(`/anomalies?serverId=${serverId}&page=1&pageSize=100`).catch(() => ({ items: [], totalCount: 0 })),
         get<ManagementHealth[]>('/management/health').catch(() => [] as ManagementHealth[]),
         get<Page<ManagementAttention>>(`/management/attention?serverId=${serverId}&page=1&pageSize=100`).catch(() => ({ items: [], totalCount: 0 } as Page<ManagementAttention>)),
       ]).then(([capacity, volumes, backups, alwaysOn, jobs, blocking, deadlocks, longRunning, operations, anomalies, healthRows, attention]) => {
@@ -493,6 +494,7 @@ export default function ServerWorkspace({ serverId, onDatabase, onBack, fullPage
   const refreshServerList = async (key: ServerListKey) => {
     if (!data) return;
     try {
+      setRefreshError('');
       const serverName = data.server.server.serverName;
       switch (key) {
         case 'server-databases': {
@@ -557,7 +559,7 @@ export default function ServerWorkspace({ serverId, onDatabase, onBack, fullPage
         }
       }
     } catch (errorValue) {
-      setError(errorValue instanceof Error ? errorValue.message : String(errorValue));
+      setRefreshError(errorValue instanceof Error ? errorValue.message : String(errorValue));
     }
   };
   useListRefresh('server-databases', () => { void refreshServerList('server-databases'); });
@@ -582,6 +584,7 @@ export default function ServerWorkspace({ serverId, onDatabase, onBack, fullPage
   if (!data) return <Typography color="text.secondary">Loading server telemetry…</Typography>;
   const tabs = ['Overview', 'Databases', 'Performance', 'Protection', 'Always On', 'Jobs', 'Capacity', 'Operations', 'Anomalies', 'AI Summary'];
   return <Stack ref={panelRoot} spacing={2}>
+    {refreshError && <Alert severity="warning" onClose={() => setRefreshError('')}>Some server telemetry could not be refreshed: {refreshError}. Existing data remains visible.</Alert>}
     {fullPage && onBack && <Button variant="text" onClick={onBack}>← Servers &amp; Databases</Button>}
     <Stack direction="row" justifyContent="space-between" alignItems="flex-start" spacing={2}>
       <Box><Typography variant="h4">{data.server.server.serverName}</Typography><Typography color="text.secondary">Server operations workspace · {data.server.server.instanceName}</Typography></Box>
