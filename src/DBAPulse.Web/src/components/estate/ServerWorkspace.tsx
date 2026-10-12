@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type RefObject, type SyntheticEvent } from 'react';
-import { Alert, Box, Button, Chip, Divider, Paper, Stack, Tab, Table, TableBody, TableCell, TableHead, TableRow, TableSortLabel, Tabs, Typography } from '@mui/material';
+import { Alert, Box, Button, Chip, Divider, LinearProgress, Paper, Stack, Tab, Table, TableBody, TableCell, TableHead, TableRow, TableSortLabel, Tabs, Typography } from '@mui/material';
 import { KpiCard, EmptyState, StatusChip } from '../common/Ui';
 import ListToolbar, { ALL_RECORDS, useListRefresh } from '../common/ListToolbar';
 import DonutChart from '../charts/DonutChart';
@@ -446,6 +446,8 @@ export default function ServerWorkspace({ serverId, onDatabase, onBack, fullPage
   const [tab, setTab] = useState(0);
   const [error, setError] = useState('');
   const [refreshError, setRefreshError] = useState('');
+  const [isTabRefreshing, setIsTabRefreshing] = useState(false);
+  const refreshSequence = useRef(0);
   const panelRoot = useRef<HTMLDivElement>(null);
   useResizablePanels(panelRoot, serverId, tab, Boolean(data));
   useEffect(() => {
@@ -577,7 +579,13 @@ export default function ServerWorkspace({ serverId, onDatabase, onBack, fullPage
   const handleTabChange = (_event: SyntheticEvent, nextTab: number) => {
     setTab(nextTab);
     if (nextTab === tab || !data) return;
-    for (const key of tabRefreshKeys[nextTab] ?? []) void refreshServerList(key);
+    const keys = tabRefreshKeys[nextTab] ?? [];
+    if (!keys.length) return;
+    const sequence = ++refreshSequence.current;
+    setIsTabRefreshing(true);
+    void Promise.all(keys.map(key => refreshServerList(key))).finally(() => {
+      if (refreshSequence.current === sequence) setIsTabRefreshing(false);
+    });
   };
 
   if (error) return <Alert severity="error">Unable to load server data: {error}</Alert>;
@@ -590,7 +598,7 @@ export default function ServerWorkspace({ serverId, onDatabase, onBack, fullPage
       <Box><Typography variant="h4">{data.server.server.serverName}</Typography><Typography color="text.secondary">Server operations workspace · {data.server.server.instanceName}</Typography></Box>
       <Chip label={data.server.server.sqlVersion} variant="outlined" />
     </Stack>
-    <Paper className="panel server-tabs-panel"><Tabs value={tab} onChange={handleTabChange} variant="scrollable" scrollButtons="auto" allowScrollButtonsMobile>{tabs.map(label => <Tab key={label} label={label} />)}</Tabs></Paper>
+    <Paper className="panel server-tabs-panel"><Tabs value={tab} onChange={handleTabChange} variant="scrollable" scrollButtons="auto" allowScrollButtonsMobile>{tabs.map(label => <Tab key={label} label={label} />)}</Tabs>{isTabRefreshing && <Box role="status" aria-live="polite" sx={{ px: 2, py: 1 }}><Typography variant="caption" color="text.secondary">Refreshing tab data…</Typography><LinearProgress sx={{ mt: 0.5 }} /></Box>}</Paper>
     {tab === 0 && <ServerSummary data={data} />}
     {tab === 1 && <DatabasesTab data={data} onDatabase={onDatabase} />}
     {tab === 2 && <PerformanceTab data={data} />}

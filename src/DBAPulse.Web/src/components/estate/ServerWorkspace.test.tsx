@@ -16,7 +16,7 @@ vi.mock('@mui/material', async () => {
     </div>
   );
   const Tab = ({ label, ...props }: { label: string; [key: string]: unknown }) => <button type="button" {...props}>{label}</button>;
-  return { Alert: passthrough, Box: passthrough, Button: passthrough, Chip: passthrough, Divider: passthrough, Paper: passthrough, Stack: passthrough, Table: passthrough, TableBody: passthrough, TableCell: passthrough, TableHead: passthrough, TableRow: passthrough, TableSortLabel: passthrough, Tabs, Tab, Typography: passthrough };
+  return { Alert: passthrough, Box: passthrough, Button: passthrough, Chip: passthrough, Divider: passthrough, LinearProgress: passthrough, Paper: passthrough, Stack: passthrough, Table: passthrough, TableBody: passthrough, TableCell: passthrough, TableHead: passthrough, TableRow: passthrough, TableSortLabel: passthrough, Tabs, Tab, Typography: passthrough };
 });
 vi.mock('../common/Ui', () => ({
   EmptyState: ({ title }: { title: string }) => <div>{title}</div>,
@@ -59,13 +59,18 @@ const fetchCallsFor = (mock: ReturnType<typeof vi.fn>, path: string) =>
 describe('ServerWorkspace tab refresh', () => {
   let fetchMock: ReturnType<typeof vi.fn>;
   let failingPath: string | undefined;
+  let pendingPath: string | undefined;
+  let releasePending: (() => void) | undefined;
 
   beforeEach(() => {
     failingPath = undefined;
+    pendingPath = undefined;
+    releasePending = undefined;
     fetchMock = vi.fn(async (request: RequestInfo | URL) => {
       const requestUrl = new URL(String(request), 'http://localhost');
       const path = requestUrl.pathname.replace(/^\/api/, '') + requestUrl.search;
       if (path === failingPath) return { ok: false, json: async () => ({}) };
+      if (path === pendingPath) return await new Promise<{ ok: boolean; json: () => Promise<unknown> }>(resolve => { releasePending = () => resolve({ ok: true, json: async () => responseFor(path) }); });
       return { ok: true, json: async () => responseFor(path) };
     });
     vi.stubGlobal('fetch', fetchMock);
@@ -138,5 +143,17 @@ describe('ServerWorkspace tab refresh', () => {
 
     await waitFor(() => expect(screen.getByText(/Some server telemetry could not be refreshed/)).toBeTruthy());
     expect(screen.getByRole('tab', { name: 'Performance' })).toBeTruthy();
+  });
+
+  it('shows a progress indicator while a tab list is refreshing', async () => {
+    render(<ServerWorkspace serverId={1} onDatabase={() => undefined} />);
+    await screen.findByRole('tab', { name: 'Always On' });
+    pendingPath = '/availability/alwayson?serverId=1&page=1&pageSize=100';
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Always On' }));
+
+    expect(await screen.findByText('Refreshing tab data…')).toBeTruthy();
+    releasePending?.();
+    await waitFor(() => expect(screen.queryByText('Refreshing tab data…')).toBeNull());
   });
 });
