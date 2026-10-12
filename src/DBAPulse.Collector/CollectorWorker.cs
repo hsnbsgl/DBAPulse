@@ -14,8 +14,7 @@ public sealed class CollectorWorker : BackgroundService
     private readonly ILogger<CollectorWorker> _logger;
     private readonly string _timeZone;
     private readonly TimeSpan _interval;
-    private TimeSpan _capacityInterval;
-    private DateTime _lastCapacityCollectedAtUtc = DateTime.MinValue;
+    private readonly Dictionary<int, DateTime> _lastCapacityCollectedAtUtc = new();
     private readonly Dictionary<int, DateTime> _lastServerCollectedAtUtc = new();
     private readonly bool _runOnce;
     private readonly long _longRunningThresholdMs;
@@ -30,7 +29,6 @@ public sealed class CollectorWorker : BackgroundService
         _source = source; _store = store; _logger = logger;
         _timeZone = configuration["DBAPULSE_DISPLAY_TIMEZONE"] ?? "Europe/Istanbul";
         _interval = TimeSpan.FromMinutes(1);
-        _capacityInterval = TimeSpan.FromMinutes(Math.Max(1, int.TryParse(configuration["DBAPULSE_CAPACITY_INTERVAL_MINUTES"], out var capacityMinutes) ? capacityMinutes : 60));
         _runOnce = string.Equals(configuration["DBAPULSE_RUN_ONCE"], "true", StringComparison.OrdinalIgnoreCase);
         var longRunningSeconds = int.TryParse(configuration["DBAPULSE_LONG_RUNNING_SECONDS"], out var configuredSeconds) ? configuredSeconds : 60;
         _longRunningThresholdMs = Math.Max(1, longRunningSeconds) * 1000L;
@@ -91,7 +89,7 @@ public sealed class CollectorWorker : BackgroundService
                 return;
             }
             _lastServerCollectedAtUtc[primaryServerId] = nowUtc;
-            _capacityInterval = TimeSpan.FromMinutes(serverIntervals.CapacityIntervalMinutes);
+            var capacityInterval = TimeSpan.FromMinutes(Math.Max(1, serverIntervals.CapacityIntervalMinutes));
 
             var serverSnapshot = Table(("CollectionRunId", typeof(long)), ("ServerId", typeof(int)), ("CollectedAtUtc", typeof(DateTime)), ("UptimeSeconds", typeof(long)));
             foreach (var server in servers.Where(s => serverIds.ContainsKey(s.ServerName))) serverSnapshot.Rows.Add(runId, serverIds[server.ServerName], DateTime.UtcNow, Db(server.UptimeSeconds));
@@ -143,7 +141,12 @@ public sealed class CollectorWorker : BackgroundService
             }, token);
             errors += await RunDomainAsync(runId, "capacity/database-size.sql", async () =>
             {
-                if (DateTime.UtcNow - _lastCapacityCollectedAtUtc < _capacityInterval) { _logger.LogInformation("Capacity collection skipped; next interval in {IntervalMinutes} minutes", _capacityInterval.TotalMinutes); return; }
+                var capacityNowUtc = DateTime.UtcNow;
+                if (_lastCapacityCollectedAtUtc.TryGetValue(serverId, out var lastCapacityCollectedAtUtc) && capacityNowUtc - lastCapacityCollectedAtUtc < capacityInterval)
+                {
+                    _logger.LogInformation("Capacity collection skipped for server {ServerId}; next interval in {IntervalMinutes} minutes", serverId, capacityInterval.TotalMinutes);
+                    return;
+                }
                 var rows = await _source.ReadCapacityAsync(token); LogRows("capacity/database-size.sql", rows.Count);
                 var table = Table(("CollectionRunId", typeof(long)), ("ServerId", typeof(int)), ("DatabaseId", typeof(int)), ("DatabaseName", typeof(string)), ("CollectedAtUtc", typeof(DateTime)), ("FileType", typeof(string)), ("AllocatedSizeMb", typeof(decimal)), ("FileCount", typeof(int)));
                 foreach (var r in rows) table.Rows.Add(runId, serverId, Db(databaseIds, r.DatabaseName), r.DatabaseName, DateTime.UtcNow, r.FileType, r.AllocatedSizeMb, r.FileCount);
@@ -152,7 +155,7 @@ public sealed class CollectorWorker : BackgroundService
                 var volumeTable = Table(("CollectionRunId", typeof(long)), ("ServerId", typeof(int)), ("VolumeId", typeof(string)), ("CollectedAtUtc", typeof(DateTime)), ("TotalBytes", typeof(long)), ("AvailableBytes", typeof(long)));
                 foreach (var v in volumes) volumeTable.Rows.Add(runId, serverId, v.VolumeId, DateTime.UtcNow, v.TotalBytes, v.AvailableBytes);
                 _logger.LogInformation("VolumeCapacitySnapshots {Count} rows inserted", await _store.InsertVolumeCapacitySnapshotsAsync(volumeTable, token));
-                _lastCapacityCollectedAtUtc = DateTime.UtcNow;
+                _lastCapacityCollectedAtUtc[serverId] = capacityNowUtc;
             }, token);
             var performanceCapturedAtUtc = DateTime.UtcNow;
             errors += await RunDomainAsync(runId, "performance/blocking.sql", async () =>
