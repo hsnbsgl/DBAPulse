@@ -17,6 +17,7 @@ command -v git >/dev/null 2>&1 || die 'git bulunamadı.'
 command -v docker >/dev/null 2>&1 || die 'docker bulunamadı.'
 [[ -f "$ROOT_DIR/docker-compose.phase2.yml" ]] || die 'docker-compose.phase2.yml bulunamadı.'
 [[ -f "$ROOT_DIR/.env" ]] || die '.env bulunamadı. Önce scripts/setup.sh çalıştırılmalı.'
+mkdir -p "$ROOT_DIR/.runtime/settings"
 
 if docker compose version >/dev/null 2>&1; then
   COMPOSE=(docker compose)
@@ -55,4 +56,3 @@ shopt -u nullglob
 log "Güncelleme tamamlandı. $collector_count ek collector güncellendi."
 log 'Ana servis durumu:'
 "${COMPOSE[@]}" -f "$ROOT_DIR/docker-compose.phase2.yml" ps
-

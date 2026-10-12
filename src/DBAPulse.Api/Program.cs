@@ -25,6 +25,7 @@ builder.Services.AddSingleton(new BaselineStore(apiConnection));
 builder.Services.AddSingleton(new ManagementReadStore(apiConnection));
 builder.Services.AddSingleton(new LiveOperationsStore(apiConnection, sourceConnection, liveSourceConnections));
 builder.Services.AddSingleton<AiSettingsStore>();
+builder.Services.AddSingleton<SettingsPersistence>();
 builder.Services.AddSingleton<SmtpSettingsStore>();
 builder.Services.AddSingleton<SmtpSettingsService>();
 builder.Services.AddHostedService<AlertNotificationWorker>();

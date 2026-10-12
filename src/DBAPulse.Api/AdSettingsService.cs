@@ -12,7 +12,11 @@ public sealed class AdSettingsStore
 {
     private readonly object _sync = new();
     private AdSettings _settings;
-    public AdSettingsStore(IConfiguration configuration) => _settings = new(
+    private readonly SettingsPersistence _persistence;
+    public AdSettingsStore(IConfiguration configuration, SettingsPersistence persistence)
+    {
+        _persistence = persistence;
+        _settings = persistence.Load<AdSettings>("ad-settings.json") ?? new(
         configuration["DBAPULSE_AD_DOMAIN"] ?? string.Empty,
         configuration["DBAPULSE_AD_HOST"] ?? string.Empty,
         int.TryParse(configuration["DBAPULSE_AD_PORT"], out var port) ? port : 389,
@@ -21,10 +25,11 @@ public sealed class AdSettingsStore
         configuration["DBAPULSE_AD_PASSWORD"] ?? string.Empty,
         bool.TryParse(configuration["DBAPULSE_AD_USE_SSL"], out var ssl) && ssl,
         bool.TryParse(configuration["DBAPULSE_AD_ENABLED"], out var enabled) && enabled);
+    }
     public AdSettings Current { get { lock (_sync) return _settings; } }
     public void Update(AdSettingsUpdate update)
     {
-        lock (_sync) _settings = _settings with {
+        lock (_sync) { _settings = _settings with {
             Domain = update.Domain?.Trim() ?? _settings.Domain,
             Host = update.Host?.Trim() ?? _settings.Host,
             Port = update.Port is > 0 and < 65536 ? update.Port.Value : _settings.Port,
@@ -33,7 +38,7 @@ public sealed class AdSettingsStore
             Password = string.IsNullOrWhiteSpace(update.Password) ? _settings.Password : update.Password.Trim(),
             UseSsl = update.UseSsl ?? _settings.UseSsl,
             Enabled = update.Enabled ?? _settings.Enabled
-        };
+        }; _persistence.Save("ad-settings.json", _settings); }
     }
     public AdSettingsView View() { var s = Current; return new(s.Domain, s.Host, s.Port, s.BaseDn, s.Username, s.UseSsl, s.Enabled, !string.IsNullOrWhiteSpace(s.Host) && !string.IsNullOrWhiteSpace(s.BaseDn)); }
 }

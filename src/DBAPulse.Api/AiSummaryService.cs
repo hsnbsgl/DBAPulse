@@ -15,22 +15,27 @@ public sealed class AiSettingsStore
 {
     private readonly object _sync = new();
     private AiSettings _settings;
-    public AiSettingsStore(IConfiguration configuration) => _settings = new(
+    private readonly SettingsPersistence _persistence;
+    public AiSettingsStore(IConfiguration configuration, SettingsPersistence persistence)
+    {
+        _persistence = persistence;
+        _settings = persistence.Load<AiSettings>("ai-settings.json") ?? new(
         configuration["DBAPULSE_AI_PROVIDER"] ?? "gemini",
         configuration["DBAPULSE_AI_MODEL"] ?? "gemini-flash-latest",
         configuration["DBAPULSE_AI_BASE_URL"] ?? "https://generativelanguage.googleapis.com/v1beta",
         configuration["DBAPULSE_AI_PROTOCOL"] ?? "gemini",
         configuration["DBAPULSE_AI_API_KEY"] ?? string.Empty);
+    }
     public AiSettings Current { get { lock (_sync) return _settings; } }
     public void Update(AiSettingsUpdate update)
     {
-        lock (_sync) _settings = _settings with {
+        lock (_sync) { _settings = _settings with {
             Provider = string.IsNullOrWhiteSpace(update.Provider) ? _settings.Provider : update.Provider.Trim(),
             Model = string.IsNullOrWhiteSpace(update.Model) ? _settings.Model : update.Model.Trim(),
             BaseUrl = string.IsNullOrWhiteSpace(update.BaseUrl) ? _settings.BaseUrl : update.BaseUrl.Trim().TrimEnd('/'),
             Protocol = string.IsNullOrWhiteSpace(update.Protocol) ? _settings.Protocol : update.Protocol.Trim(),
             ApiKey = string.IsNullOrWhiteSpace(update.ApiKey) ? _settings.ApiKey : update.ApiKey.Trim()
-        };
+        }; _persistence.Save("ai-settings.json", _settings); }
     }
     public AiSettingsView View() { var s = Current; return new(s.Provider, s.Model, s.BaseUrl, s.Protocol, !string.IsNullOrWhiteSpace(s.ApiKey) && !string.Equals(s.Provider, "none", StringComparison.OrdinalIgnoreCase)); }
 }

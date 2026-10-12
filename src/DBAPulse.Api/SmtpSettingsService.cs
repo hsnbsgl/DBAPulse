@@ -13,7 +13,11 @@ public sealed class SmtpSettingsStore
 {
     private readonly object _sync = new();
     private SmtpSettings _settings;
-    public SmtpSettingsStore(IConfiguration configuration) => _settings = new(
+    private readonly SettingsPersistence _persistence;
+    public SmtpSettingsStore(IConfiguration configuration, SettingsPersistence persistence)
+    {
+        _persistence = persistence;
+        _settings = persistence.Load<SmtpSettings>("smtp-settings.json") ?? new(
         configuration["DBAPULSE_SMTP_HOST"] ?? string.Empty,
         int.TryParse(configuration["DBAPULSE_SMTP_PORT"], out var port) ? port : 587,
         configuration["DBAPULSE_SMTP_SECURITY"] ?? "starttls",
@@ -21,10 +25,11 @@ public sealed class SmtpSettingsStore
         configuration["DBAPULSE_SMTP_PASSWORD"] ?? string.Empty,
         configuration["DBAPULSE_SMTP_FROM_EMAIL"] ?? string.Empty,
         configuration["DBAPULSE_SMTP_FROM_NAME"] ?? "DBA Pulse");
+    }
     public SmtpSettings Current { get { lock (_sync) return _settings; } }
     public void Update(SmtpSettingsUpdate update)
     {
-        lock (_sync) _settings = _settings with {
+        lock (_sync) { _settings = _settings with {
             Host = string.IsNullOrWhiteSpace(update.Host) ? _settings.Host : update.Host.Trim(),
             Port = update.Port is > 0 and < 65536 ? update.Port.Value : _settings.Port,
             Security = string.IsNullOrWhiteSpace(update.Security) ? _settings.Security : update.Security.Trim().ToLowerInvariant(),
@@ -32,7 +37,7 @@ public sealed class SmtpSettingsStore
             Password = string.IsNullOrWhiteSpace(update.Password) ? _settings.Password : update.Password.Trim(),
             FromEmail = update.FromEmail?.Trim() ?? _settings.FromEmail,
             FromName = update.FromName?.Trim() ?? _settings.FromName
-        };
+        }; _persistence.Save("smtp-settings.json", _settings); }
     }
     public SmtpSettingsView View() { var s = Current; return new(s.Host, s.Port, s.Security, s.Username, s.FromEmail, s.FromName, !string.IsNullOrWhiteSpace(s.Host) && !string.IsNullOrWhiteSpace(s.FromEmail)); }
 }
