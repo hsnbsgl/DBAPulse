@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
+import { useEffect, useMemo, useRef, useState, type RefObject, type SyntheticEvent } from 'react';
 import { Alert, Box, Button, Chip, Divider, Paper, Stack, Tab, Table, TableBody, TableCell, TableHead, TableRow, TableSortLabel, Tabs, Typography } from '@mui/material';
 import { KpiCard, EmptyState, StatusChip } from '../common/Ui';
 import ListToolbar, { ALL_RECORDS, useListRefresh } from '../common/ListToolbar';
@@ -42,6 +42,18 @@ type Anomaly = { id: number; metricType: string; databaseName?: string; entityKe
 type ManagementAttention = { id: number; severity: string; domain: string; issue: string; explanationCode: string; databaseName?: string; status: string };
 type ManagementHealth = { entityType: string; serverId: number; databaseId?: number; serverName: string; databaseName?: string; overallStatus: string; performanceStatus: string; protectionStatus: string; availabilityStatus: string; capacityStatus: string; anomalyStatus: string; freshnessStatus: string };
 type WorkspaceData = { server: ServerDetail; serverHealth?: ManagementHealth; serverAttention: ManagementAttention[]; capacity: Page<CapacityDb>; volumes: Page<Volume>; backups: Page<Backup>; alwaysOn: Page<AlwaysOn>; jobs: Page<Job>; blocking: Blocking[]; deadlocks: Deadlock[]; longRunning: LongRunning[]; operations: Page<OperationalEvent>; anomalies: Page<Anomaly> };
+type ServerListKey = 'server-databases' | 'server-blocking' | 'server-deadlocks' | 'server-long-running' | 'server-backups' | 'server-always-on' | 'server-jobs' | 'server-capacity-databases' | 'server-capacity-volumes' | 'server-operational-events' | 'server-anomalies';
+
+const tabRefreshKeys: Partial<Record<number, ServerListKey[]>> = {
+  1: ['server-databases'],
+  2: ['server-blocking', 'server-deadlocks', 'server-long-running'],
+  3: ['server-backups'],
+  4: ['server-always-on'],
+  5: ['server-jobs'],
+  6: ['server-capacity-databases', 'server-capacity-volumes'],
+  7: ['server-operational-events'],
+  8: ['server-anomalies'],
+};
 
 type SortState = { key: string; direction: 'asc' | 'desc' };
 
@@ -478,7 +490,6 @@ export default function ServerWorkspace({ serverId, onDatabase, onBack, fullPage
     return () => { cancelled = true; };
   }, [serverId]);
 
-  type ServerListKey = 'server-databases' | 'server-blocking' | 'server-deadlocks' | 'server-long-running' | 'server-backups' | 'server-always-on' | 'server-jobs' | 'server-capacity-databases' | 'server-capacity-volumes' | 'server-operational-events' | 'server-anomalies';
   const refreshServerList = async (key: ServerListKey) => {
     if (!data) return;
     try {
@@ -561,6 +572,12 @@ export default function ServerWorkspace({ serverId, onDatabase, onBack, fullPage
   useListRefresh('server-operational-events', () => { void refreshServerList('server-operational-events'); });
   useListRefresh('server-anomalies', () => { void refreshServerList('server-anomalies'); });
 
+  const handleTabChange = (_event: SyntheticEvent, nextTab: number) => {
+    setTab(nextTab);
+    if (nextTab === tab || !data) return;
+    for (const key of tabRefreshKeys[nextTab] ?? []) void refreshServerList(key);
+  };
+
   if (error) return <Alert severity="error">Unable to load server data: {error}</Alert>;
   if (!data) return <Typography color="text.secondary">Loading server telemetry…</Typography>;
   const tabs = ['Overview', 'Databases', 'Performance', 'Protection', 'Always On', 'Jobs', 'Capacity', 'Operations', 'Anomalies', 'AI Summary'];
@@ -570,7 +587,7 @@ export default function ServerWorkspace({ serverId, onDatabase, onBack, fullPage
       <Box><Typography variant="h4">{data.server.server.serverName}</Typography><Typography color="text.secondary">Server operations workspace · {data.server.server.instanceName}</Typography></Box>
       <Chip label={data.server.server.sqlVersion} variant="outlined" />
     </Stack>
-    <Paper className="panel server-tabs-panel"><Tabs value={tab} onChange={(_, value) => setTab(value)} variant="scrollable" scrollButtons="auto" allowScrollButtonsMobile>{tabs.map(label => <Tab key={label} label={label} />)}</Tabs></Paper>
+    <Paper className="panel server-tabs-panel"><Tabs value={tab} onChange={handleTabChange} variant="scrollable" scrollButtons="auto" allowScrollButtonsMobile>{tabs.map(label => <Tab key={label} label={label} />)}</Tabs></Paper>
     {tab === 0 && <ServerSummary data={data} />}
     {tab === 1 && <DatabasesTab data={data} onDatabase={onDatabase} />}
     {tab === 2 && <PerformanceTab data={data} />}
