@@ -63,6 +63,12 @@ public sealed class AuditMiddleware
         var path = context.Request.Path.Value ?? string.Empty;
         if (path.Equals("/api/health", StringComparison.OrdinalIgnoreCase)) return false;
         if (!path.StartsWith("/api/", StringComparison.OrdinalIgnoreCase)) return false;
+        if (path.Equals("/api/auth/login", StringComparison.OrdinalIgnoreCase))
+        {
+            action = "Authentication.Login";
+            resourceType = "Authentication";
+            return true;
+        }
         if (path.StartsWith("/api/auth", StringComparison.OrdinalIgnoreCase)) return false;
         var parts = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
         if (parts.Length < 2 || !parts[0].Equals("api", StringComparison.OrdinalIgnoreCase)) return false;
