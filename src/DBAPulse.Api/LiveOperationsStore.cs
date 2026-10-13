@@ -124,9 +124,15 @@ public sealed class LiveOperationsStore
 
         await using var connection = new SqlConnection(_managementConnection);
         await connection.OpenAsync(token);
-        await using var command = new SqlCommand("SELECT TOP (1) Id FROM dbo.Servers ORDER BY Id", connection);
-        var primaryServerId = Convert.ToInt32(await command.ExecuteScalarAsync(token));
-        return primaryServerId == serverId ? _connectionString : null;
+        await using var command = new SqlCommand("SELECT COUNT(*) FROM dbo.Servers WHERE IsActive = 1", connection);
+        var activeServerCount = Convert.ToInt32(await command.ExecuteScalarAsync(token));
+
+        // The default source connection is sufficient for a single-server
+        // installation even when that server's identity is not 1 (for
+        // example, after old server records were removed). Multi-server
+        // installations must provide DBAPULSE_LIVE_SOURCE_CONNECTIONS so a
+        // live query cannot accidentally run against the wrong instance.
+        return activeServerCount == 1 ? _connectionString : null;
     }
 
     private static Dictionary<int, string> ParseConnections(string? value)

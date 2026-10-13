@@ -81,7 +81,7 @@ Performance sekmesindeki **Live Operations** paneli kaynak SQL Server’a doğru
 aktif request/blocking verisini yaklaşık 15 saniyede bir yeniler. Bu panel için API container’ına
 `DBAPULSE_SOURCE_CONNECTION` verilmesi gerekir; bağlantı hesabının `VIEW SERVER STATE` yetkisi
 olmalıdır (`VIEW SERVER STATE` veya SQL Server 2022+ için `VIEW SERVER PERFORMANCE STATE`).
-Tek sunuculu kurulumda bu bağlantı ilk sunucu için kullanılır. Çoklu sunucu canlı
+Tek aktif sunuculu kurulumda bu bağlantı server ID’sinden bağımsız olarak kullanılır. Çoklu sunucu canlı
 erişimi için `DBAPULSE_LIVE_SOURCE_CONNECTIONS` değişkenine server ID → connection string JSON
 eşlemesi eklenir; örneğin `{"1":"Server=sql01,1433;...","2":"Server=sql02,1433;..."}`.
 Diğer grafik ve listeler collector snapshot’larından beslenir.
