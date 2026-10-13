@@ -22,7 +22,7 @@ public sealed class AuditMiddleware
             return;
         }
 
-        var stopwatch = Stopwatch.StartNew(); var statusCode = StatusCodes.Status200OK; var result = "Success";
+        var stopwatch = Stopwatch.StartNew(); var statusCode = StatusCodes.Status200OK; var result = "Success"; string? failureMessage = null;
         try
         {
             await _next(context);
@@ -32,6 +32,7 @@ public sealed class AuditMiddleware
         catch (Exception ex)
         {
             statusCode = StatusCodes.Status500InternalServerError; result = "Failed";
+            failureMessage = Limit(ex.GetBaseException().Message, 1500);
             _logger.LogError(ex, "Audited request failed: {Action} {Path} CorrelationId={CorrelationId}", action, context.Request.Path, correlationId);
             throw;
         }
@@ -39,6 +40,15 @@ public sealed class AuditMiddleware
         {
             stopwatch.Stop();
             var userName = context.User.Identity?.IsAuthenticated == true ? context.User.Identity.Name ?? "authenticated" : "anonymous"; var userRole = context.User.FindFirst(System.Security.Claims.ClaimTypes.Role)?.Value ?? "Unauthenticated";
+            if (statusCode >= 400)
+            {
+                additionalData = Limit(JsonSerializer.Serialize(new
+                {
+                    error = failureMessage ?? $"HTTP {statusCode} response",
+                    statusCode,
+                    original = additionalData
+                }), 2000);
+            }
             var entry = new AuditLogEntry(0, DateTimeOffset.UtcNow, userName, userRole, action, resourceType, resourceId,
                 context.Request.Method, Limit(context.Request.Path.Value, 512)!, result, statusCode, stopwatch.ElapsedMilliseconds, correlationId,
                 Limit(context.Connection.RemoteIpAddress?.ToString(), 128), Limit(context.Request.Headers.UserAgent.FirstOrDefault(), 512), additionalData);
@@ -51,8 +61,9 @@ public sealed class AuditMiddleware
     {
         action = string.Empty; resourceType = string.Empty; resourceId = null; additionalData = null;
         var path = context.Request.Path.Value ?? string.Empty;
-        if (!HttpMethods.IsGet(context.Request.Method) && !path.StartsWith("/api/settings", StringComparison.OrdinalIgnoreCase)) return false;
         if (path.Equals("/api/health", StringComparison.OrdinalIgnoreCase)) return false;
+        if (!path.StartsWith("/api/", StringComparison.OrdinalIgnoreCase)) return false;
+        if (path.StartsWith("/api/auth", StringComparison.OrdinalIgnoreCase)) return false;
         var parts = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
         if (parts.Length < 2 || !parts[0].Equals("api", StringComparison.OrdinalIgnoreCase)) return false;
         if (parts[1].Equals("settings", StringComparison.OrdinalIgnoreCase))
@@ -117,7 +128,9 @@ public sealed class AuditMiddleware
             if (parts.Length >= 4 && parts[3].Equals("capacity-history", StringComparison.OrdinalIgnoreCase)) { action = "Database.CapacityHistory.View"; additionalData = JsonSerializer.Serialize(new { days = AllowedDays(context.Request.Query["days"]) }); return true; }
             action = resourceId is null ? "Database.List" : "Database.View"; return true;
         }
-        return false;
+        action = "Api.Request";
+        resourceType = "Api";
+        return true;
     }
     private static string GetCorrelationId(string? value) => Guid.TryParse(value, out var id) ? id.ToString() : Guid.NewGuid().ToString();
     private static string? Numeric(string value) => int.TryParse(value, out _) ? value : null;
