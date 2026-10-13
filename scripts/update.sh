@@ -17,6 +17,7 @@ command -v git >/dev/null 2>&1 || die 'git bulunamadı.'
 command -v docker >/dev/null 2>&1 || die 'docker bulunamadı.'
 [[ -f "$ROOT_DIR/docker-compose.phase2.yml" ]] || die 'docker-compose.phase2.yml bulunamadı.'
 [[ -f "$ROOT_DIR/.env" ]] || die '.env bulunamadı. Önce scripts/setup.sh çalıştırılmalı.'
+[[ -s "$ROOT_DIR/.secrets/dbapulse-admin-password" ]] || die '.secrets/dbapulse-admin-password bulunamadı veya boş. Update durduruldu; önce scripts/reset-admin-password.sh çalıştırın.'
 mkdir -p "$ROOT_DIR/.runtime/settings"
 
 if docker compose version >/dev/null 2>&1; then
