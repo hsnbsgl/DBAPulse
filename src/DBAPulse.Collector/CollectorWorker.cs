@@ -4,6 +4,7 @@ using DBAPulse.Data;
 using DBAPulse.Domain;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Data.SqlClient;
 
 namespace DBAPulse.Collector;
 
@@ -13,6 +14,7 @@ public sealed class CollectorWorker : BackgroundService
     private readonly ManagementStore _store;
     private readonly ILogger<CollectorWorker> _logger;
     private readonly string _timeZone;
+    private readonly string _sourceTarget;
     private readonly TimeSpan _interval;
     private readonly Dictionary<int, DateTime> _lastCapacityCollectedAtUtc = new();
     private readonly Dictionary<int, DateTime> _lastServerCollectedAtUtc = new();
@@ -28,6 +30,7 @@ public sealed class CollectorWorker : BackgroundService
     {
         _source = source; _store = store; _logger = logger;
         _timeZone = configuration["DBAPULSE_DISPLAY_TIMEZONE"] ?? "Europe/Istanbul";
+        _sourceTarget = SourceTarget(configuration["DBAPULSE_SOURCE_CONNECTION"]);
         _interval = TimeSpan.FromMinutes(1);
         _runOnce = string.Equals(configuration["DBAPULSE_RUN_ONCE"], "true", StringComparison.OrdinalIgnoreCase);
         var longRunningSeconds = int.TryParse(configuration["DBAPULSE_LONG_RUNNING_SECONDS"], out var configuredSeconds) ? configuredSeconds : 60;
@@ -197,7 +200,7 @@ public sealed class CollectorWorker : BackgroundService
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
-                    errors++; _logger.LogError(ex, "Anomaly evaluation failed; raw collection remains available"); await _store.InsertErrorAsync(runId, "baseline/anomaly-evaluation", null, ex.Message, token);
+                    errors++; _logger.LogError(ex, "Anomaly evaluation failed; raw collection remains available"); await _store.InsertErrorAsync(runId, "baseline/anomaly-evaluation", _sourceTarget, ex.Message, token);
                 }
             }
             stopwatch.Stop();
@@ -211,7 +214,7 @@ public sealed class CollectorWorker : BackgroundService
             _logger.LogError(ex, "Collection #{RunId} failed", runId);
             if (runId != 0)
             {
-                await _store.InsertErrorAsync(runId, "collection", null, ex.Message, token);
+                await _store.InsertErrorAsync(runId, "collection", _sourceTarget, ex.Message, token);
                 await _store.CompleteRunAsync(runId, "Failed", DateTime.UtcNow, stopwatch.ElapsedMilliseconds, token);
             }
         }
@@ -223,12 +226,18 @@ public sealed class CollectorWorker : BackgroundService
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.LogError(ex, "{QueryName} failed; continuing collection", queryName);
-            await _store.InsertErrorAsync(runId, queryName, null, ex.Message, token);
+            await _store.InsertErrorAsync(runId, queryName, _sourceTarget, ex.Message, token);
             return 1;
         }
     }
 
     private void LogRows(string query, int count) => _logger.LogInformation("{QueryName} OK - {Count} rows", query, count);
+    private static string SourceTarget(string? connectionString)
+    {
+        if (string.IsNullOrWhiteSpace(connectionString)) return "unknown-source";
+        try { return new SqlConnectionStringBuilder(connectionString).DataSource; }
+        catch { return "configured-source"; }
+    }
     private static OperationalEventInput ToOperationalEvent(AnomalyEvaluation finding)
     {
         var eventType = finding.MetricType switch { "JobDuration" => "JobDurationAnomaly", "BackupDuration" => "BackupDurationAnomaly", "DatabaseGrowth" => "GrowthAnomaly", _ => "PerformanceAnomaly" };
