@@ -25,6 +25,14 @@ if [[ -z "${2:-}" ]]; then
 fi
 [[ -n "$connection_string" ]] || die "DBAPULSE_SOURCE_CONNECTION .env içinde bulunamadı."
 
+# Accept .env values written as 'Server=...' or "Server=..." while keeping
+# quotes that are part of an actual password untouched.
+if [[ "$connection_string" == \'*\' && "$connection_string" == *\' ]]; then
+  connection_string="${connection_string:1:${#connection_string}-2}"
+elif [[ "$connection_string" == \"*\" && "$connection_string" == *\" ]]; then
+  connection_string="${connection_string:1:${#connection_string}-2}"
+fi
+
 existing="{}"
 if live_line="$(sed -n 's/^DBAPULSE_LIVE_SOURCE_CONNECTIONS=//p' "$ENV_FILE" | head -n 1)"; then
   if [[ -n "$live_line" ]]; then
