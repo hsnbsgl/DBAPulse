@@ -11,21 +11,19 @@ die() {
 
 command -v jq >/dev/null 2>&1 || die "jq gerekli. Debian/Ubuntu: sudo apt-get install -y jq"
 
-server_id="${1:-}"
-connection_string="${2:-}"
-
-if [[ -z "$server_id" ]]; then
-  read -r -p "Server ID: " server_id
-fi
-[[ "$server_id" =~ ^[0-9]+$ ]] || die "Server ID sayısal olmalıdır."
-
-if [[ -z "$connection_string" ]]; then
-  read -r -s -p "Kaynak SQL bağlantı stringi: " connection_string
-  echo
-fi
-[[ -n "$connection_string" ]] || die "Bağlantı stringi boş olamaz."
-
 [[ -f "$ENV_FILE" ]] || die "$ENV_FILE bulunamadı. Önce .env dosyasını oluşturun."
+
+server_id="${1:-${DBAPULSE_LIVE_SERVER_ID:-}}"
+connection_string="${2:-${DBAPULSE_SOURCE_CONNECTION:-}}"
+
+[[ "$server_id" =~ ^[0-9]+$ ]] || die "Kullanım: $0 <server-id> [connection-string]"
+
+if [[ -z "${2:-}" ]]; then
+  if source_line="$(sed -n 's/^DBAPULSE_SOURCE_CONNECTION=//p' "$ENV_FILE" | head -n 1)" && [[ -n "$source_line" ]]; then
+    connection_string="$source_line"
+  fi
+fi
+[[ -n "$connection_string" ]] || die "DBAPULSE_SOURCE_CONNECTION .env içinde bulunamadı."
 
 existing="{}"
 if live_line="$(sed -n 's/^DBAPULSE_LIVE_SOURCE_CONNECTIONS=//p' "$ENV_FILE" | head -n 1)"; then
