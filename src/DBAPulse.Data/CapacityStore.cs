@@ -12,7 +12,23 @@ public sealed class CapacityStore
     public async Task<PagedResult<CapacityDatabaseRow>> DatabasesAsync(string? status,int? serverId,string? forecastStatus,int page,int pageSize,CancellationToken token,int? databaseId=null)
     {
         var result = await PagedAsync("dbo.usp_Capacity_Databases", c => { Add(c,"@Status",status); Add(c,"@ServerId",serverId); Add(c,"@ForecastStatus",forecastStatus); Add(c,"@DatabaseId",databaseId); c.Parameters.AddWithValue("@PageNumber",page); c.Parameters.AddWithValue("@PageSize",Math.Clamp(pageSize,1,100)); }, r => new CapacityDatabaseRow(I(r,"DatabaseId"),S(r,"DatabaseName"),S(r,"ServerName"),Dec(r,"CurrentDataSizeMb"),Dec(r,"CurrentLogSizeMb"),Dec(r,"CurrentTotalSizeMb"),DecNullable(r,"Growth7dMb"),DecNullable(r,"Growth30dMb"),DecNullable(r,"Growth90dMb"),DecNullable(r,"GrowthRateMbPerDay"),DecNullable(r,"Forecast30dMb"),DecNullable(r,"Forecast90dMb"),DecNullable(r,"RSquared"),I(r,"SampleCount"),I(r,"HistoryDays"),S(r,"ForecastStatus"),S(r,"CapacityStatus"),UtcNullable(r,"LastCollectedAtUtc"),S(r,"DataFreshness")),token);
-        var calculated = await Task.WhenAll(result.Items.Select(async x => CapacityForecastCalculator.Apply(x, await HistoryAsync(x.DatabaseId, 365, token))));
+        // A page can contain up to 100 databases. Do not open 100 concurrent
+        // history queries against SQL Server; that makes the capacity screen
+        // appear hung and can exhaust the API connection pool. Forecasts only
+        // use 7/30/90 day reference points, so 90 days is sufficient here.
+        using var gate = new SemaphoreSlim(8);
+        var calculated = await Task.WhenAll(result.Items.Select(async x =>
+        {
+            await gate.WaitAsync(token);
+            try
+            {
+                return CapacityForecastCalculator.Apply(x, await HistoryAsync(x.DatabaseId, 90, token));
+            }
+            finally
+            {
+                gate.Release();
+            }
+        }));
         return result with { Items = calculated };
     }
     public Task<IReadOnlyList<CapacityHistoryRow>> HistoryAsync(int databaseId,int days,CancellationToken token) => ManyAsync("dbo.usp_Capacity_DatabaseHistory", c=>{c.Parameters.AddWithValue("@DatabaseId",databaseId);c.Parameters.AddWithValue("@Days",new[]{7,30,90,180,365}.Contains(days)?days:30);}, r=>new CapacityHistoryRow(Utc(r,"CollectedAtUtc"),Dec(r,"DataSizeMb"),Dec(r,"LogSizeMb"),Dec(r,"TotalSizeMb"),DecNullable(r,"ForecastTotalSizeMb"),S(r,"SeriesType")),token);
