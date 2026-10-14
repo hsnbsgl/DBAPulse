@@ -32,7 +32,10 @@ if live_line="$(sed -n 's/^DBAPULSE_LIVE_SOURCE_CONNECTIONS=//p' "$ENV_FILE" | h
   fi
 fi
 
-jq -e 'type == "object"' >/dev/null 2>&1 <<<"$existing" || die ".env içindeki DBAPULSE_LIVE_SOURCE_CONNECTIONS geçerli JSON değil."
+if ! jq -e 'type == "object"' >/dev/null 2>&1 <<<"$existing"; then
+  echo "Uyarı: mevcut DBAPULSE_LIVE_SOURCE_CONNECTIONS geçersiz; yedeklenip yeniden oluşturulacak." >&2
+  existing="{}"
+fi
 updated="$(jq -c --arg id "$server_id" --arg connection "$connection_string" '.[$id] = $connection' <<<"$existing")"
 
 backup_file="$ENV_FILE.bak.$(date +%Y%m%d%H%M%S)"
@@ -40,25 +43,32 @@ cp "$ENV_FILE" "$backup_file"
 chmod 600 "$backup_file" 2>/dev/null || true
 
 tmp_file="$(mktemp "$ROOT_DIR/.env.tmp.XXXXXX")"
-cleanup() { rm -f "$tmp_file"; }
+replacement_file="$(mktemp "$ROOT_DIR/.env.live-source.tmp.XXXXXX")"
+printf 'DBAPULSE_LIVE_SOURCE_CONNECTIONS=%s\n' "$updated" >"$replacement_file"
+cleanup() { rm -f "$tmp_file" "$replacement_file"; }
 trap cleanup EXIT
 
 if grep -q '^DBAPULSE_LIVE_SOURCE_CONNECTIONS=' "$ENV_FILE"; then
-  awk -v value="DBAPULSE_LIVE_SOURCE_CONNECTIONS=$updated" '
-    BEGIN { replaced = 0 }
+  awk -v replacement_file="$replacement_file" '
+    BEGIN {
+      getline replacement < replacement_file
+      close(replacement_file)
+      replaced = 0
+    }
     /^DBAPULSE_LIVE_SOURCE_CONNECTIONS=/ {
-      print value
+      print replacement
       replaced = 1
       next
     }
     { print }
     END {
-      if (!replaced) print value
+      if (!replaced) print replacement
     }
   ' "$ENV_FILE" >"$tmp_file"
 else
   cat "$ENV_FILE" >"$tmp_file"
-  printf '\nDBAPULSE_LIVE_SOURCE_CONNECTIONS=%s\n' "$updated" >>"$tmp_file"
+  printf '\n' >>"$tmp_file"
+  cat "$replacement_file" >>"$tmp_file"
 fi
 
 chmod --reference="$ENV_FILE" "$tmp_file" 2>/dev/null || chmod 600 "$tmp_file"
