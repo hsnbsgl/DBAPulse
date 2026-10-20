@@ -34,7 +34,7 @@ public sealed class DashboardStore
     {
         await using var connection = await OpenAsync(token); await using var command = Procedure(connection, "dbo.usp_Server_Detail"); command.Parameters.AddWithValue("@ServerId", id);
         await using var reader = await command.ExecuteReaderAsync(token); ServerDetail? detail = null; var databases = new List<ServerDatabaseItem>();
-        if (await reader.ReadAsync(token)) detail = new(I(reader, "ServerId"), S(reader, "ServerName"), S(reader, "InstanceName"), S(reader, "SqlVersion"), S(reader, "Edition"), S(reader, "TimeZoneId"), Utc(reader, "LastSeenAtUtc"), I(reader, "DatabaseCount"));
+        if (await reader.ReadAsync(token)) detail = new(I(reader, "ServerId"), S(reader, "ServerName"), S(reader, "InstanceName"), S(reader, "SqlVersion"), S(reader, "Edition"), S(reader, "TimeZoneId"), Utc(reader, "LastSeenAtUtc"), Convert.ToBoolean(reader["AnomalyTrackingEnabled"]), I(reader, "DatabaseCount"));
         if (await reader.NextResultAsync(token)) while (await reader.ReadAsync(token)) databases.Add(new(I(reader, "DatabaseId"), S(reader, "DatabaseName"), S(reader, "DatabaseStatus"), S(reader, "RecoveryModel"), Utc(reader, "LastSeenAtUtc")));
         return new(detail, databases);
     }

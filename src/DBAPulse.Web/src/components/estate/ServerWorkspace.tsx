@@ -24,7 +24,7 @@ const bytes = (value?: number | null) => {
 };
 
 type Page<T> = { items: T[]; totalCount: number };
-type Server = { serverId: number; serverName: string; instanceName: string; sqlVersion: string; edition: string; databaseCount: number; lastSeenAtUtc: string; timeZoneId?: string };
+type Server = { serverId: number; serverName: string; instanceName: string; sqlVersion: string; edition: string; databaseCount: number; lastSeenAtUtc: string; anomalyTrackingEnabled: boolean; timeZoneId?: string };
 type ServerDb = { databaseId: number; databaseName: string; databaseStatus: string; recoveryModel: string; lastSeenAtUtc: string };
 type ServerDetail = { server: Server; databases: ServerDb[] };
 type CapacityDb = { databaseId: number; databaseName: string; currentDataSizeMb: number; currentLogSizeMb: number; currentTotalSizeMb: number; growth30dMb?: number; forecastStatus: string; capacityStatus: string; lastCollectedAtUtc?: string };
@@ -44,15 +44,15 @@ type ManagementHealth = { entityType: string; serverId: number; databaseId?: num
 type WorkspaceData = { server: ServerDetail; serverHealth?: ManagementHealth; serverAttention: ManagementAttention[]; capacity: Page<CapacityDb>; volumes: Page<Volume>; backups: Page<Backup>; alwaysOn: Page<AlwaysOn>; jobs: Page<Job>; blocking: Blocking[]; deadlocks: Deadlock[]; longRunning: LongRunning[]; operations: Page<OperationalEvent>; anomalies: Page<Anomaly> };
 type ServerListKey = 'server-databases' | 'server-blocking' | 'server-deadlocks' | 'server-long-running' | 'server-backups' | 'server-always-on' | 'server-jobs' | 'server-capacity-databases' | 'server-capacity-volumes' | 'server-operational-events' | 'server-anomalies';
 
-const tabRefreshKeys: Partial<Record<number, ServerListKey[]>> = {
-  1: ['server-databases'],
-  2: ['server-blocking', 'server-deadlocks', 'server-long-running'],
-  3: ['server-backups'],
-  4: ['server-always-on'],
-  5: ['server-jobs'],
-  6: ['server-capacity-databases', 'server-capacity-volumes'],
-  7: ['server-operational-events'],
-  8: ['server-anomalies'],
+const tabRefreshKeys: Partial<Record<string, ServerListKey[]>> = {
+  Databases: ['server-databases'],
+  Performance: ['server-blocking', 'server-deadlocks', 'server-long-running'],
+  Protection: ['server-backups'],
+  'Always On': ['server-always-on'],
+  Jobs: ['server-jobs'],
+  Capacity: ['server-capacity-databases', 'server-capacity-volumes'],
+  Operations: ['server-operational-events'],
+  Anomalies: ['server-anomalies'],
 };
 
 type SortState = { key: string; direction: 'asc' | 'desc' };
@@ -102,7 +102,7 @@ const serverHealthReasons = (health?: ManagementHealth) => {
     // dedicated health signal is available. Do not present that as the cause
     // of an unrelated server warning, but keep real future capacity states.
     if (signal.label === 'Capacity' && status === 'unknown') return false;
-    return !['healthy', 'fresh', 'notconfigured'].includes(status);
+    return !['healthy', 'fresh', 'notconfigured', 'disabled'].includes(status);
   });
 };
 
@@ -481,7 +481,7 @@ export default function ServerWorkspace({ serverId, onDatabase, onBack, fullPage
         get<Deadlock[]>('/performance/deadlocks?hours=24').catch(() => []),
         get<LongRunning[]>('/performance/long-running?hours=24').catch(() => []),
         get<Page<OperationalEvent>>(`/operations/events?serverId=${serverId}&page=1&pageSize=100`).catch(() => ({ items: [], totalCount: 0 })),
-        get<Page<Anomaly>>(`/anomalies?serverId=${serverId}&page=1&pageSize=100`).catch(() => ({ items: [], totalCount: 0 })),
+        server.server.anomalyTrackingEnabled ? get<Page<Anomaly>>(`/anomalies?serverId=${serverId}&page=1&pageSize=100`).catch(() => ({ items: [], totalCount: 0 })) : Promise.resolve({ items: [], totalCount: 0 }),
         get<ManagementHealth[]>('/management/health').catch(() => [] as ManagementHealth[]),
         get<Page<ManagementAttention>>(`/management/attention?serverId=${serverId}&page=1&pageSize=100`).catch(() => ({ items: [], totalCount: 0 } as Page<ManagementAttention>)),
       ]).then(([capacity, volumes, backups, alwaysOn, jobs, blocking, deadlocks, longRunning, operations, anomalies, healthRows, attention]) => {
@@ -579,7 +579,8 @@ export default function ServerWorkspace({ serverId, onDatabase, onBack, fullPage
   const handleTabChange = (_event: SyntheticEvent, nextTab: number) => {
     setTab(nextTab);
     if (nextTab === tab || !data) return;
-    const keys = tabRefreshKeys[nextTab] ?? [];
+    const tabs = ['Overview', 'Databases', 'Performance', 'Protection', 'Always On', 'Jobs', 'Capacity', 'Operations', ...(data.server.server.anomalyTrackingEnabled ? ['Anomalies'] : []), 'AI Summary'];
+    const keys = tabRefreshKeys[tabs[nextTab]] ?? [];
     if (!keys.length) return;
     const sequence = ++refreshSequence.current;
     setIsTabRefreshing(true);
@@ -590,7 +591,7 @@ export default function ServerWorkspace({ serverId, onDatabase, onBack, fullPage
 
   if (error) return <Alert severity="error">Unable to load server data: {error}</Alert>;
   if (!data) return <Typography color="text.secondary">Loading server telemetry…</Typography>;
-  const tabs = ['Overview', 'Databases', 'Performance', 'Protection', 'Always On', 'Jobs', 'Capacity', 'Operations', 'Anomalies', 'AI Summary'];
+  const tabs = ['Overview', 'Databases', 'Performance', 'Protection', 'Always On', 'Jobs', 'Capacity', 'Operations', ...(data.server.server.anomalyTrackingEnabled ? ['Anomalies'] : []), 'AI Summary'];
   return <Stack ref={panelRoot} spacing={2}>
     {refreshError && <Alert severity="warning" onClose={() => setRefreshError('')}>Some server telemetry could not be refreshed: {refreshError}. Existing data remains visible.</Alert>}
     {fullPage && onBack && <Button variant="text" onClick={onBack}>← Servers &amp; Databases</Button>}
@@ -607,6 +608,6 @@ export default function ServerWorkspace({ serverId, onDatabase, onBack, fullPage
     {tab === 5 && <JobsTab data={data} />}
     {tab === 6 && <CapacityTab data={data} />}
     {tab === 7 && <OperationsTab data={data} />}
-    {tab === 8 && <AnomaliesTab data={data} />} {tab === 9 && <AiSummaryTab serverId={serverId} />}
+    {tabs[tab] === 'Anomalies' && <AnomaliesTab data={data} />} {tabs[tab] === 'AI Summary' && <AiSummaryTab serverId={serverId} />}
   </Stack>;
 }

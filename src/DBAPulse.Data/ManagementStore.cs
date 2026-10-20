@@ -63,6 +63,15 @@ public sealed class ManagementStore
         await using var command = new SqlCommand("dbo.usp_Retention_Cleanup", connection) { CommandType = CommandType.StoredProcedure, CommandTimeout = 300 };
         await command.ExecuteNonQueryAsync(token);
     }
+    public async Task<HashSet<int>> GetAnomalyTrackingServerIdsAsync(CancellationToken token)
+    {
+        await using var connection = await OpenAsync(token);
+        await using var command = new SqlCommand("SELECT Id FROM dbo.Servers WHERE IsActive=1 AND AnomalyTrackingEnabled=1", connection);
+        await using var reader = await command.ExecuteReaderAsync(token);
+        var ids = new HashSet<int>();
+        while (await reader.ReadAsync(token)) ids.Add(reader.GetInt32(0));
+        return ids;
+    }
     public async Task<bool> IsServerActiveAsync(int serverId, CancellationToken token)
     {
         await using var connection = await OpenAsync(token);

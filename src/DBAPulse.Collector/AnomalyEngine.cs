@@ -5,6 +5,7 @@ namespace DBAPulse.Collector;
 
 public sealed class AnomalyEngine
 {
+    private readonly ManagementStore _management;
     private readonly BaselineStore _store;
     private readonly BaselineCalculator _calculator = new();
     private readonly AnomalyDetector _detector = new();
@@ -16,14 +17,15 @@ public sealed class AnomalyEngine
     private readonly int _resolveAfterSeconds;
     private DateTime _lastCalculatedAtUtc = DateTime.MinValue;
 
-    public AnomalyEngine(BaselineStore store, IConfiguration configuration)
+    public AnomalyEngine(ManagementStore management, BaselineStore store, IConfiguration configuration)
     {
-        _store = store; _windowDays = Math.Max(1, Int(configuration["DBAPULSE_BASELINE_WINDOW_DAYS"], 30)); _minimumSamples = Math.Max(1, Int(configuration["DBAPULSE_BASELINE_MIN_SAMPLES"], 20)); _minimumDays = Math.Max(1, Int(configuration["DBAPULSE_BASELINE_MIN_DAYS"], 7)); _timeZone = configuration["DBAPULSE_DISPLAY_TIMEZONE"] ?? "Europe/Istanbul"; _recalculationInterval = TimeSpan.FromHours(Math.Max(1, Int(configuration["DBAPULSE_BASELINE_RECALC_INTERVAL_HOURS"], 6))); _resolveAfterSeconds = Math.Max(1, Int(configuration["DBAPULSE_ANOMALY_RESOLVE_AFTER_SECONDS"], 900));
+        _management = management; _store = store; _windowDays = Math.Max(1, Int(configuration["DBAPULSE_BASELINE_WINDOW_DAYS"], 30)); _minimumSamples = Math.Max(1, Int(configuration["DBAPULSE_BASELINE_MIN_SAMPLES"], 20)); _minimumDays = Math.Max(1, Int(configuration["DBAPULSE_BASELINE_MIN_DAYS"], 7)); _timeZone = configuration["DBAPULSE_DISPLAY_TIMEZONE"] ?? "Europe/Istanbul"; _recalculationInterval = TimeSpan.FromHours(Math.Max(1, Int(configuration["DBAPULSE_BASELINE_RECALC_INTERVAL_HOURS"], 6))); _resolveAfterSeconds = Math.Max(1, Int(configuration["DBAPULSE_ANOMALY_RESOLVE_AFTER_SECONDS"], 900));
     }
 
     public async Task<IReadOnlyList<AnomalyEvaluation>> EvaluateAsync(DateTime asOfUtc, CancellationToken token)
     {
-        var samples = await _store.SamplesAsync(asOfUtc.AddDays(-_windowDays), asOfUtc, token);
+        var enabledServers = await _management.GetAnomalyTrackingServerIdsAsync(token);
+        var samples = (await _store.SamplesAsync(asOfUtc.AddDays(-_windowDays), asOfUtc, token)).Where(x => enabledServers.Contains(x.ServerId)).ToArray();
         IReadOnlyList<BaselineResult> baselines;
         if (asOfUtc - _lastCalculatedAtUtc >= _recalculationInterval)
         {

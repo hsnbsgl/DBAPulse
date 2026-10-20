@@ -41,6 +41,7 @@ const serverDetail = {
     edition: 'Enterprise',
     databaseCount: 0,
     lastSeenAtUtc: '2026-10-12T10:00:00Z',
+    anomalyTrackingEnabled: true,
   },
   databases: [],
 };

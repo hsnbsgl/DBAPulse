@@ -23,7 +23,7 @@ public sealed record CapacitySummary(decimal TotalDataSizeMb, decimal TotalLogSi
 public sealed record CapacityRow(int DatabaseId, string DatabaseName, int ServerId, decimal DataSizeMb, decimal LogSizeMb, decimal TotalSizeMb, DateTimeOffset CollectedAtUtc);
 public sealed record RecentCollection(long CollectionRunId, DateTimeOffset StartedAtUtc, DateTimeOffset? FinishedAtUtc, string Status, long? DurationMs, int ErrorCount);
 public sealed record ServerListItem(int ServerId, string ServerName, string InstanceName, string SqlVersion, string Edition, int DatabaseCount, DateTimeOffset LastSeenAtUtc);
-public sealed record ServerDetail(int ServerId, string ServerName, string InstanceName, string SqlVersion, string Edition, string TimeZoneId, DateTimeOffset LastSeenAtUtc, int DatabaseCount);
+public sealed record ServerDetail(int ServerId, string ServerName, string InstanceName, string SqlVersion, string Edition, string TimeZoneId, DateTimeOffset LastSeenAtUtc, bool AnomalyTrackingEnabled, int DatabaseCount);
 public sealed record ServerDatabaseItem(int DatabaseId, string DatabaseName, string DatabaseStatus, string RecoveryModel, DateTimeOffset LastSeenAtUtc);
 public sealed record ServerDetailResult(ServerDetail? Server, IReadOnlyList<ServerDatabaseItem> Databases);
 public sealed record DatabaseListItem(int DatabaseId, string DatabaseName, int ServerId, string ServerName, string DatabaseStatus, string RecoveryModel, DateTimeOffset LastSeenAtUtc, decimal? CurrentDataSizeMb, decimal? CurrentLogSizeMb, decimal? CurrentTotalSizeMb, DateTime? LastFullBackupAtSource);
