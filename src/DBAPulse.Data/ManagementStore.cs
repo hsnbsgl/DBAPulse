@@ -57,6 +57,12 @@ public sealed class ManagementStore
         await using var reader = await command.ExecuteReaderAsync(token);
         return await reader.ReadAsync(token) ? (reader.GetInt32(0), reader.GetInt32(1)) : (5, 60);
     }
+    public async Task RunRetentionCleanupAsync(CancellationToken token)
+    {
+        await using var connection = await OpenAsync(token);
+        await using var command = new SqlCommand("dbo.usp_Retention_Cleanup", connection) { CommandType = CommandType.StoredProcedure, CommandTimeout = 300 };
+        await command.ExecuteNonQueryAsync(token);
+    }
     public async Task<bool> IsServerActiveAsync(int serverId, CancellationToken token)
     {
         await using var connection = await OpenAsync(token);

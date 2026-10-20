@@ -207,6 +207,8 @@ public sealed class CollectorWorker : BackgroundService
             var status = errors == 0 ? "Success" : "PartialSuccess";
             await _store.CompleteRunAsync(runId, status, DateTime.UtcNow, stopwatch.ElapsedMilliseconds, token);
             _logger.LogInformation("Collection #{RunId} completed; Status: {Status}; Duration: {DurationMs} ms", runId, status, stopwatch.ElapsedMilliseconds);
+            try { await _store.RunRetentionCleanupAsync(token); _logger.LogInformation("Retention cleanup check completed"); }
+            catch (Exception cleanupError) when (cleanupError is not OperationCanceledException) { _logger.LogWarning(cleanupError, "Retention cleanup failed; collection data remains available"); }
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
