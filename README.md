@@ -82,7 +82,9 @@ Performance sekmesindeki **Live Operations** paneli kaynak SQL Server’a doğru
 Paneldeki **Refresh** düğmesi sorguyu anında yeniden çalıştırır. Bu panel için API container’ına
 `DBAPULSE_SOURCE_CONNECTION` verilmesi gerekir; bağlantı hesabının `VIEW SERVER STATE` yetkisi
 olmalıdır (`VIEW SERVER STATE` veya SQL Server 2022+ için `VIEW SERVER PERFORMANCE STATE`).
-`sp_WhoIsActive` yordamı kaynak SQL Server’ın `master` veritabanında kurulu olmalıdır.
+`sp_WhoIsActive` kaynak SQL Server’ın `master` veritabanında yoksa API, Live Operations sorgusu
+öncesinde gerekli uyumlu yordamı otomatik olarak oluşturur; bağlantı hesabının procedure oluşturma
+yetkisi yoksa yönetici tarafından kurulum yapılmalıdır.
 Tek aktif sunuculu kurulumda bu bağlantı server ID’sinden bağımsız olarak kullanılır. Çoklu sunucu canlı
 erişimi için `DBAPULSE_LIVE_SOURCE_CONNECTIONS` değişkenine server ID → connection string JSON
 eşlemesi eklenir; örneğin `{"1":"Server=sql01,1433;...","2":"Server=sql02,1433;..."}`.

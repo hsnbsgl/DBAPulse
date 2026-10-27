@@ -24,6 +24,40 @@ public sealed record LiveConnectionsSnapshot(int ActiveConnectionCount, int Dist
 
 public sealed class LiveOperationsStore
 {
+    private const string InstallWhoIsActiveSql = """
+        IF OBJECT_ID(N'dbo.sp_WhoIsActive', N'P') IS NULL
+        BEGIN
+            EXEC(N'
+        CREATE PROCEDURE dbo.sp_WhoIsActive
+        AS
+        BEGIN
+            SET NOCOUNT ON;
+            SELECT TOP (100)
+                s.session_id,
+                r.status,
+                DB_NAME(COALESCE(r.database_id, s.database_id)) AS database_name,
+                CONVERT(nvarchar(4000), st.text) AS sql_text,
+                r.wait_type,
+                r.wait_time,
+                NULLIF(r.blocking_session_id, 0) AS blocking_session_id,
+                s.login_name,
+                s.host_name,
+                s.program_name,
+                COALESCE(r.start_time, s.last_request_start_time) AS start_time,
+                SYSUTCDATETIME() AS collection_time,
+                COALESCE(r.cpu_time, 0) AS CPU,
+                COALESCE(r.reads, 0) AS reads,
+                COALESCE(r.writes, 0) AS writes,
+                s.open_transaction_count AS open_tran_count
+            FROM sys.dm_exec_sessions AS s
+            LEFT JOIN sys.dm_exec_requests AS r ON r.session_id = s.session_id
+            OUTER APPLY sys.dm_exec_sql_text(r.sql_handle) AS st
+            WHERE s.is_user_process = 1 AND s.session_id <> @@SPID
+            ORDER BY COALESCE(r.total_elapsed_time, 0) DESC, s.session_id;
+        END');
+        END;
+        """;
+
     private readonly string _connectionString;
     private readonly string _managementConnection;
     private readonly Dictionary<int, string> _serverConnections;
@@ -97,8 +131,11 @@ public sealed class LiveOperationsStore
         if (sourceConnection is null)
             throw new InvalidOperationException($"No live source connection is configured for server {serverId}.");
 
-        await using var connection = new SqlConnection(sourceConnection);
+        var masterConnection = new SqlConnectionStringBuilder(sourceConnection) { InitialCatalog = "master" }.ConnectionString;
+        await using var connection = new SqlConnection(masterConnection);
         await connection.OpenAsync(token);
+        await using (var installCommand = new SqlCommand(InstallWhoIsActiveSql, connection) { CommandTimeout = 10 })
+            await installCommand.ExecuteNonQueryAsync(token);
         await using var command = new SqlCommand("EXEC master.dbo.sp_WhoIsActive;", connection) { CommandTimeout = 10 };
         await using var reader = await command.ExecuteReaderAsync(token);
         var rows = new List<IReadOnlyDictionary<string, object?>>();

@@ -89,7 +89,9 @@ request ve blocking verisini kaynak SQL Server’dan doğrudan okur ve yaklaşı
 Paneldeki **Refresh** düğmesi manuel yenileme sağlar. Bu özellik için API’nin
 `DBAPULSE_SOURCE_CONNECTION` ayarı ve kaynak login üzerinde `VIEW SERVER STATE` (SQL Server 2019
 ve öncesi) veya `VIEW SERVER PERFORMANCE STATE` (SQL Server 2022+) yetkisi gerekir.
-`sp_WhoIsActive` yordamı kaynak SQL Server’ın `master` veritabanında kurulu olmalıdır.
+`sp_WhoIsActive` kaynak SQL Server’ın `master` veritabanında yoksa API, Live Operations sorgusu
+öncesinde gerekli uyumlu yordamı otomatik olarak oluşturur; bağlantı hesabının procedure oluşturma
+yetkisi yoksa yönetici tarafından kurulum yapılmalıdır.
 Yetki yoksa snapshot tabanlı performance listeleri çalışmaya devam eder; canlı panel bilgi mesajı
 gösterir.
 
