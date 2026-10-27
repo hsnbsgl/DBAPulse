@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
-import { Alert, AppBar, Box, ButtonBase, Chip, CircularProgress, Collapse, Drawer, FormControl, IconButton, List, ListItemButton, ListItemIcon, ListItemText, MenuItem, Select, Toolbar, Tooltip, Typography } from '@mui/material';
+import { Alert, AppBar, Box, ButtonBase, Chip, CircularProgress, Collapse, Divider, Drawer, FormControl, IconButton, List, ListItemButton, ListItemIcon, ListItemText, MenuItem, Paper, Select, Stack, Toolbar, Tooltip, Typography } from '@mui/material';
 import DnsIcon from '@mui/icons-material/Dns';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
@@ -16,6 +16,7 @@ import TableChartIcon from '@mui/icons-material/TableChart';
 import CodeIcon from '@mui/icons-material/Code';
 import ViewModuleIcon from '@mui/icons-material/ViewModule';
 import FunctionsIcon from '@mui/icons-material/Functions';
+import CloseIcon from '@mui/icons-material/Close';
 import sqlServerLogo from '../../assets/sql-server-logo.svg';
 
 type NavItem = { key: string; label: string; icon: ReactNode; target?: string };
@@ -35,6 +36,8 @@ type SidebarHealth = { entityType: string; serverId: number; overallStatus: stri
 type SidebarDatabase = { databaseId: number; databaseName: string; databaseStatus: string };
 type ObjectExplorerItem = { schemaName: string; objectName: string };
 type ObjectExplorerSnapshot = { tables: ObjectExplorerItem[]; procedures: ObjectExplorerItem[]; views: ObjectExplorerItem[]; functions: ObjectExplorerItem[] };
+type SelectedObject = { serverId: number; databaseName: string; schemaName: string; objectName: string; objectType: string };
+type ObjectDefinition = SelectedObject & { definition: string };
 
 const healthTone = (status: string) => {
   const normalized = status.toLowerCase();
@@ -77,7 +80,7 @@ function ServerSelector({ servers, value, onChange }: { servers: SidebarServer[]
   </FormControl>;
 }
 
-function ObjectExplorer({ servers, onServerSelect }: { servers: SidebarServer[]; onServerSelect?: (serverId: number) => void }) {
+function ObjectExplorer({ servers, onServerSelect, onObjectSelect }: { servers: SidebarServer[]; onServerSelect?: (serverId: number) => void; onObjectSelect: (object: SelectedObject) => void }) {
   const base = import.meta.env.VITE_API_BASE_URL || '/api';
   const [expandedServers, setExpandedServers] = useState<Set<number>>(new Set());
   const [expandedDatabases, setExpandedDatabases] = useState<Set<string>>(new Set());
@@ -130,12 +133,12 @@ function ObjectExplorer({ servers, onServerSelect }: { servers: SidebarServer[];
     void loadObjects(serverId, databaseName);
   };
 
-  const folder = (label: string, icon: ReactNode, items: ObjectExplorerItem[]) => <List component="div" disablePadding sx={{ pl: 2.5 }}>{<ListItemButton dense sx={{ minHeight: 28, py: 0 }}><ListItemIcon sx={{ minWidth: 28 }}>{icon}</ListItemIcon><ListItemText primary={`${label} (${items.length})`} primaryTypographyProps={{ variant: 'caption', noWrap: true }} /></ListItemButton>}{items.map(item => <ListItemButton key={`${item.schemaName}.${item.objectName}`} dense sx={{ minHeight: 26, py: 0, pl: 4.5 }}><ListItemText primary={`${item.schemaName}.${item.objectName}`} primaryTypographyProps={{ variant: 'caption', noWrap: true, title: `${item.schemaName}.${item.objectName}` }} /></ListItemButton>)}</List>;
+  const folder = (label: string, icon: ReactNode, items: ObjectExplorerItem[], objectType: string, serverId: number, databaseName: string) => <List component="div" disablePadding sx={{ pl: 2.5 }}>{<ListItemButton dense sx={{ minHeight: 28, py: 0 }}><ListItemIcon sx={{ minWidth: 28 }}>{icon}</ListItemIcon><ListItemText primary={`${label} (${items.length})`} primaryTypographyProps={{ variant: 'caption', noWrap: true }} /></ListItemButton>}{items.map(item => <ListItemButton key={`${item.schemaName}.${item.objectName}`} dense sx={{ minHeight: 26, py: 0, pl: 4.5 }} onClick={() => onObjectSelect({ serverId, databaseName, schemaName: item.schemaName, objectName: item.objectName, objectType })}><ListItemText primary={`${item.schemaName}.${item.objectName}`} primaryTypographyProps={{ variant: 'caption', noWrap: true, title: `${item.schemaName}.${item.objectName}` }} /></ListItemButton>)}</List>;
 
   return <List component="div" disablePadding className="server-nav-sublist">{servers.map(server => {
     const serverOpen = expandedServers.has(server.serverId);
     const serverDbs = databases[server.serverId] || [];
-    return <Box key={server.serverId}><ListItemButton className="server-nav-item" onClick={() => { toggleServer(server.serverId); onServerSelect?.(server.serverId); }}><ListItemIcon>{serverOpen ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}<Box component="span" className={`server-health-led server-health-${healthTone(server.healthStatus)}`} title={`${server.serverName}: ${server.healthStatus}`} /></ListItemIcon><ListItemText primary={server.serverName} secondary={`${server.healthStatus} · ${server.databaseCount} DB`} /></ListItemButton><Collapse in={serverOpen} timeout="auto" unmountOnExit><List component="div" disablePadding sx={{ pl: 2 }}><ListItemButton dense sx={{ minHeight: 30, py: 0 }} onClick={() => toggleServer(server.serverId)}><ListItemIcon sx={{ minWidth: 28 }}>{loadingServers.has(server.serverId) ? <CircularProgress size={14} /> : <StorageIcon fontSize="small" />}</ListItemIcon><ListItemText primary="Databases" primaryTypographyProps={{ variant: 'caption', fontWeight: 600 }} /></ListItemButton>{errors[`server:${server.serverId}`] && <Alert severity="warning" sx={{ ml: 2, mr: 1, py: 0 }}>{errors[`server:${server.serverId}`]}</Alert>}{serverDbs.map(database => { const key = `${server.serverId}:${database.databaseName}`; const databaseOpen = expandedDatabases.has(key); const snapshot = objects[key]; return <Box key={database.databaseId}><ListItemButton dense sx={{ minHeight: 28, py: 0, pl: 2 }} onClick={() => toggleDatabase(server.serverId, database.databaseName)}><ListItemIcon sx={{ minWidth: 28 }}>{databaseOpen ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}<StorageIcon fontSize="small" /></ListItemIcon><ListItemText primary={database.databaseName} secondary={database.databaseStatus} primaryTypographyProps={{ variant: 'caption', noWrap: true, title: database.databaseName }} secondaryTypographyProps={{ variant: 'caption', noWrap: true }} /></ListItemButton><Collapse in={databaseOpen} timeout="auto" unmountOnExit><Box>{loadingDatabases.has(key) && <Box sx={{ pl: 7, py: 0.5 }}><CircularProgress size={13} /></Box>}{errors[key] && <Alert severity="warning" sx={{ ml: 5, mr: 1, py: 0 }}>{errors[key]}</Alert>}{snapshot && <>{folder('Tables', <TableChartIcon fontSize="small" />, snapshot.tables)}{folder('Stored Procedures', <CodeIcon fontSize="small" />, snapshot.procedures)}{folder('Views', <ViewModuleIcon fontSize="small" />, snapshot.views)}{folder('Functions', <FunctionsIcon fontSize="small" />, snapshot.functions)}</>}</Box></Collapse></Box>; })}</List></Collapse></Box>;
+    return <Box key={server.serverId}><ListItemButton className="server-nav-item" onClick={() => { toggleServer(server.serverId); onServerSelect?.(server.serverId); }}><ListItemIcon>{serverOpen ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}<Box component="span" className={`server-health-led server-health-${healthTone(server.healthStatus)}`} title={`${server.serverName}: ${server.healthStatus}`} /></ListItemIcon><ListItemText primary={server.serverName} secondary={`${server.healthStatus} · ${server.databaseCount} DB`} /></ListItemButton><Collapse in={serverOpen} timeout="auto" unmountOnExit><List component="div" disablePadding sx={{ pl: 2 }}><ListItemButton dense sx={{ minHeight: 30, py: 0 }} onClick={() => toggleServer(server.serverId)}><ListItemIcon sx={{ minWidth: 28 }}>{loadingServers.has(server.serverId) ? <CircularProgress size={14} /> : <StorageIcon fontSize="small" />}</ListItemIcon><ListItemText primary="Databases" primaryTypographyProps={{ variant: 'caption', fontWeight: 600 }} /></ListItemButton>{errors[`server:${server.serverId}`] && <Alert severity="warning" sx={{ ml: 2, mr: 1, py: 0 }}>{errors[`server:${server.serverId}`]}</Alert>}{serverDbs.map(database => { const key = `${server.serverId}:${database.databaseName}`; const databaseOpen = expandedDatabases.has(key); const snapshot = objects[key]; return <Box key={database.databaseId}><ListItemButton dense sx={{ minHeight: 28, py: 0, pl: 2 }} onClick={() => toggleDatabase(server.serverId, database.databaseName)}><ListItemIcon sx={{ minWidth: 28 }}>{databaseOpen ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}<StorageIcon fontSize="small" /></ListItemIcon><ListItemText primary={database.databaseName} secondary={database.databaseStatus} primaryTypographyProps={{ variant: 'caption', noWrap: true, title: database.databaseName }} secondaryTypographyProps={{ variant: 'caption', noWrap: true }} /></ListItemButton><Collapse in={databaseOpen} timeout="auto" unmountOnExit><Box>{loadingDatabases.has(key) && <Box sx={{ pl: 7, py: 0.5 }}><CircularProgress size={13} /></Box>}{errors[key] && <Alert severity="warning" sx={{ ml: 5, mr: 1, py: 0 }}>{errors[key]}</Alert>}{snapshot && <>{folder('Tables', <TableChartIcon fontSize="small" />, snapshot.tables, 'Table', server.serverId, database.databaseName)}{folder('Stored Procedures', <CodeIcon fontSize="small" />, snapshot.procedures, 'Procedure', server.serverId, database.databaseName)}{folder('Views', <ViewModuleIcon fontSize="small" />, snapshot.views, 'View', server.serverId, database.databaseName)}{folder('Functions', <FunctionsIcon fontSize="small" />, snapshot.functions, 'Function', server.serverId, database.databaseName)}</>}</Box></Collapse></Box>; })}</List></Collapse></Box>;
   })}</List>;
 }
 
@@ -144,6 +147,10 @@ export default function AppShell({ activeView, onNavigate, onServerSelect, theme
   const [servers, setServers] = useState<SidebarServer[]>([]);
   const [serversOpen, setServersOpen] = useState(active === 'estate');
   const [selectedServerId, setSelectedServerId] = useState(0);
+  const [selectedObject, setSelectedObject] = useState<SelectedObject>();
+  const [definition, setDefinition] = useState<ObjectDefinition>();
+  const [definitionLoading, setDefinitionLoading] = useState(false);
+  const [definitionError, setDefinitionError] = useState('');
   useEffect(() => {
     const base = import.meta.env.VITE_API_BASE_URL || '/api';
     Promise.all([fetch(`${base}/servers`), fetch(`${base}/management/health`)]).then(async ([serverResponse, healthResponse]) => {
@@ -155,6 +162,14 @@ export default function AppShell({ activeView, onNavigate, onServerSelect, theme
     }).catch(() => setServers([]));
   }, []);
   useEffect(() => { if (active === 'estate') setServersOpen(true); }, [active]);
+  useEffect(() => {
+    if (!selectedObject) { setDefinition(undefined); return; }
+    const controller = new AbortController();
+    const query = new URLSearchParams({ serverId: String(selectedObject.serverId), databaseName: selectedObject.databaseName, schemaName: selectedObject.schemaName, objectName: selectedObject.objectName, objectType: selectedObject.objectType });
+    setDefinitionLoading(true); setDefinitionError('');
+    fetch(`${import.meta.env.VITE_API_BASE_URL || '/api'}/live/object-definition?${query}`, { signal: controller.signal }).then(async response => { if (!response.ok) throw new Error(`API request failed (${response.status})`); return response.json() as Promise<ObjectDefinition>; }).then(setDefinition).catch(error => { if (error.name !== 'AbortError') { setDefinition(undefined); setDefinitionError(error instanceof Error ? error.message : String(error)); } }).finally(() => { if (!controller.signal.aborted) setDefinitionLoading(false); });
+    return () => controller.abort();
+  }, [selectedObject]);
   const showServerSelector = !['dashboard', 'estate', 'server', 'database', 'settings'].includes(activeView);
   return <ServerFilterContext.Provider value={{ selectedServerId, setSelectedServerId, servers }}><Box className="app-shell">
     <AppBar position="fixed" className="topbar"><Toolbar>
@@ -166,8 +181,8 @@ export default function AppShell({ activeView, onNavigate, onServerSelect, theme
       <Tooltip title={themeMode === 'dark' ? 'Açık temaya geç' : 'Koyu temaya geç'}><IconButton className="theme-toggle" size="small" onClick={onToggleTheme} aria-label={themeMode === 'dark' ? 'Açık temaya geç' : 'Koyu temaya geç'}>{themeMode === 'dark' ? <LightModeIcon fontSize="small" /> : <DarkModeIcon fontSize="small" />}</IconButton></Tooltip><Typography className="identity-label">anonymous</Typography>
     </Toolbar></AppBar>
     <Drawer variant="permanent" className="drawer"><ButtonBase className="drawer-brand" onClick={() => onNavigate('dashboard')} aria-label="SQL Server ana ekrana dön"><SqlServerLogo /></ButtonBase>
-      <List className="nav-list">{nav.map(item => item.key === 'estate' ? <Box key={item.key} className="estate-nav-group"><ListItemButton className="estate-nav-item" selected={active === item.key || active === 'dashboard'} onClick={() => { onNavigate(item.target || item.key); setServersOpen(open => !open); }}><ListItemIcon>{item.icon}</ListItemIcon><ListItemText primary={item.label} /><Box className="nav-expand-icon">{serversOpen ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}</Box></ListItemButton><Collapse in={serversOpen} timeout="auto" unmountOnExit><ObjectExplorer servers={servers} onServerSelect={serverId => { setSelectedServerId(serverId); onServerSelect?.(serverId); }} /></Collapse></Box> : <ListItemButton key={item.key} selected={active === item.key} onClick={() => onNavigate(item.target || item.key)}><ListItemIcon>{item.icon}</ListItemIcon><ListItemText primary={item.label} /></ListItemButton>)}</List>
+      <List className="nav-list">{nav.map(item => item.key === 'estate' ? <Box key={item.key} className="estate-nav-group"><ListItemButton className="estate-nav-item" selected={active === item.key || active === 'dashboard'} onClick={() => { onNavigate(item.target || item.key); setServersOpen(open => !open); }}><ListItemIcon>{item.icon}</ListItemIcon><ListItemText primary={item.label} /><Box className="nav-expand-icon">{serversOpen ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}</Box></ListItemButton><Collapse in={serversOpen} timeout="auto" unmountOnExit><ObjectExplorer servers={servers} onServerSelect={serverId => { setSelectedServerId(serverId); onServerSelect?.(serverId); }} onObjectSelect={setSelectedObject} /></Collapse></Box> : <ListItemButton key={item.key} selected={active === item.key} onClick={() => onNavigate(item.target || item.key)}><ListItemIcon>{item.icon}</ListItemIcon><ListItemText primary={item.label} /></ListItemButton>)}</List>
     </Drawer>
-    <Box component="main" className="main"><Box className="content">{children}</Box></Box>
+      <Box component="main" className="main"><Box className="content">{(selectedObject || definitionLoading || definitionError) && <Paper className="panel" sx={{ mb: 2 }}><Stack direction="row" justifyContent="space-between" alignItems="center"><Box><Typography variant="h6">{selectedObject ? `${selectedObject.schemaName}.${selectedObject.objectName}` : 'Object definition'}</Typography>{selectedObject && <Typography variant="caption" color="text.secondary">{selectedObject.databaseName} · {selectedObject.objectType}</Typography>}</Box>{selectedObject && <IconButton size="small" onClick={() => { setSelectedObject(undefined); setDefinition(undefined); }} aria-label="Close object definition"><CloseIcon fontSize="small" /></IconButton>}</Stack><Divider sx={{ my: 1.5 }} />{definitionLoading ? <CircularProgress size={22} /> : definitionError ? <Alert severity="error">{definitionError}</Alert> : definition && <Box component="pre" sx={{ m: 0, p: 2, maxHeight: '55vh', overflow: 'auto', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace', fontSize: 12, lineHeight: 1.55, borderRadius: 1, bgcolor: 'action.hover' }}>{definition.definition}</Box>}</Paper>}{children}</Box></Box>
   </Box></ServerFilterContext.Provider>;
 }

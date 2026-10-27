@@ -23,6 +23,7 @@ public sealed record LiveConnectionApplicationRow(string ApplicationName, int Co
 public sealed record LiveConnectionsSnapshot(int ActiveConnectionCount, int DistinctApplicationCount, IReadOnlyList<LiveConnectionApplicationRow> Applications);
 public sealed record ObjectExplorerItem(string SchemaName, string ObjectName);
 public sealed record ObjectExplorerSnapshot(IReadOnlyList<ObjectExplorerItem> Tables, IReadOnlyList<ObjectExplorerItem> Procedures, IReadOnlyList<ObjectExplorerItem> Views, IReadOnlyList<ObjectExplorerItem> Functions);
+public sealed record ObjectDefinition(string SchemaName, string ObjectName, string ObjectType, string Definition);
 
 public sealed class LiveOperationsStore
 {
@@ -190,22 +191,18 @@ public sealed class LiveOperationsStore
 
         var databaseConnection = new SqlConnectionStringBuilder(sourceConnection) { InitialCatalog = databaseName }.ConnectionString;
         const string sql = """
-            SELECT N'Table' AS object_type, SCHEMA_NAME(t.schema_id) AS schema_name, t.name AS object_name
-            FROM sys.tables AS t
-            WHERE t.is_ms_shipped = 0
-            UNION ALL
-            SELECT N'Procedure', SCHEMA_NAME(p.schema_id), p.name
-            FROM sys.procedures AS p
-            WHERE p.is_ms_shipped = 0
-            UNION ALL
-            SELECT N'View', SCHEMA_NAME(v.schema_id), v.name
-            FROM sys.views AS v
-            WHERE v.is_ms_shipped = 0
-            UNION ALL
-            SELECT N'Function', SCHEMA_NAME(o.schema_id), o.name
+            SELECT
+                CASE
+                    WHEN o.type = 'U' THEN N'Table'
+                    WHEN o.type IN ('P', 'PC') THEN N'Procedure'
+                    WHEN o.type = 'V' THEN N'View'
+                    WHEN o.type IN ('FN', 'IF', 'TF', 'FS', 'FT') THEN N'Function'
+                END AS object_type,
+                SCHEMA_NAME(o.schema_id) AS schema_name,
+                o.name AS object_name
             FROM sys.objects AS o
-            WHERE o.is_ms_shipped = 0 AND o.type IN ('FN', 'IF', 'TF', 'FS', 'FT')
-            ORDER BY object_type, schema_name, object_name;
+            WHERE o.is_ms_shipped = 0
+              AND o.type IN ('U', 'P', 'PC', 'V', 'FN', 'IF', 'TF', 'FS', 'FT');
             """;
 
         await using var connection = new SqlConnection(databaseConnection);
@@ -228,7 +225,92 @@ public sealed class LiveOperationsStore
             }
         }
 
-        return new(tables, procedures, views, functions);
+        return new(
+            tables.OrderBy(item => (item.SchemaName, item.ObjectName), StringTupleComparer.Instance).ToList(),
+            procedures.OrderBy(item => (item.SchemaName, item.ObjectName), StringTupleComparer.Instance).ToList(),
+            views.OrderBy(item => (item.SchemaName, item.ObjectName), StringTupleComparer.Instance).ToList(),
+            functions.OrderBy(item => (item.SchemaName, item.ObjectName), StringTupleComparer.Instance).ToList());
+    }
+
+    public async Task<ObjectDefinition?> GetObjectDefinitionAsync(int serverId, string databaseName, string schemaName, string objectName, string objectType, CancellationToken token)
+    {
+        if (string.IsNullOrWhiteSpace(databaseName) || string.IsNullOrWhiteSpace(schemaName) || string.IsNullOrWhiteSpace(objectName))
+            throw new ArgumentException("Database, schema and object names are required.");
+        if (!new[] { "Table", "Procedure", "View", "Function" }.Contains(objectType, StringComparer.OrdinalIgnoreCase))
+            throw new ArgumentException("Unsupported object type.", nameof(objectType));
+
+        var sourceConnection = await ResolveSourceConnectionAsync(serverId, token);
+        if (sourceConnection is null)
+            throw new InvalidOperationException($"No live source connection is configured for server {serverId}.");
+        var databaseConnection = new SqlConnectionStringBuilder(sourceConnection) { InitialCatalog = databaseName }.ConnectionString;
+
+        await using var connection = new SqlConnection(databaseConnection);
+        await connection.OpenAsync(token);
+        if (string.Equals(objectType, "Table", StringComparison.OrdinalIgnoreCase))
+        {
+            const string tableSql = """
+                SELECT c.name AS column_name, TYPE_NAME(c.user_type_id) AS type_name, c.max_length,
+                       c.precision, c.scale, c.is_nullable, c.is_identity
+                FROM sys.tables AS t
+                INNER JOIN sys.schemas AS s ON s.schema_id = t.schema_id
+                INNER JOIN sys.columns AS c ON c.object_id = t.object_id
+                WHERE s.name = @SchemaName AND t.name = @ObjectName AND t.is_ms_shipped = 0
+                ORDER BY c.column_id;
+                """;
+            await using var tableCommand = new SqlCommand(tableSql, connection) { CommandTimeout = 15 };
+            tableCommand.Parameters.AddWithValue("@SchemaName", schemaName);
+            tableCommand.Parameters.AddWithValue("@ObjectName", objectName);
+            await using var tableReader = await tableCommand.ExecuteReaderAsync(token);
+            var columns = new List<string>();
+            while (await tableReader.ReadAsync(token))
+            {
+                var typeName = Convert.ToString(tableReader["type_name"]) ?? "sql_variant";
+                var maxLength = Convert.ToInt32(tableReader["max_length"]);
+                var precision = Convert.ToInt32(tableReader["precision"]);
+                var scale = Convert.ToInt32(tableReader["scale"]);
+                var type = typeName.ToLowerInvariant() switch
+                {
+                    "nvarchar" or "nchar" => $"{typeName}({(maxLength < 0 ? "max" : (maxLength / 2).ToString())})",
+                    "varchar" or "char" or "varbinary" or "binary" => $"{typeName}({(maxLength < 0 ? "max" : maxLength.ToString())})",
+                    "decimal" or "numeric" => $"{typeName}({precision},{scale})",
+                    "datetime2" or "datetimeoffset" or "time" => $"{typeName}({scale})",
+                    _ => typeName,
+                };
+                var nullable = Convert.ToBoolean(tableReader["is_nullable"]) ? "NULL" : "NOT NULL";
+                var identity = Convert.ToBoolean(tableReader["is_identity"]) ? " IDENTITY(1,1)" : string.Empty;
+                columns.Add($"    {QuoteIdentifier(Convert.ToString(tableReader["column_name"]) ?? string.Empty)} {type}{identity} {nullable}");
+            }
+            return columns.Count == 0 ? null : new(schemaName, objectName, "Table", $"CREATE TABLE {QuoteIdentifier(schemaName)}.{QuoteIdentifier(objectName)} (\n{string.Join(",\n", columns)}\n);");
+        }
+
+        const string moduleSql = """
+            SELECT sm.definition
+            FROM sys.sql_modules AS sm
+            INNER JOIN sys.objects AS o ON o.object_id = sm.object_id
+            INNER JOIN sys.schemas AS s ON s.schema_id = o.schema_id
+            WHERE s.name = @SchemaName AND o.name = @ObjectName AND o.is_ms_shipped = 0
+              AND ((@ObjectType = N'Procedure' AND o.type IN ('P', 'PC'))
+                OR (@ObjectType = N'View' AND o.type = 'V')
+                OR (@ObjectType = N'Function' AND o.type IN ('FN', 'IF', 'TF', 'FS', 'FT')));
+            """;
+        await using var moduleCommand = new SqlCommand(moduleSql, connection) { CommandTimeout = 15 };
+        moduleCommand.Parameters.AddWithValue("@SchemaName", schemaName);
+        moduleCommand.Parameters.AddWithValue("@ObjectName", objectName);
+        moduleCommand.Parameters.AddWithValue("@ObjectType", objectType);
+        var definition = Convert.ToString(await moduleCommand.ExecuteScalarAsync(token));
+        return string.IsNullOrWhiteSpace(definition) ? null : new(schemaName, objectName, objectType, definition);
+    }
+
+    private static string QuoteIdentifier(string value) => $"[{value.Replace("]", "]]", StringComparison.Ordinal)}]";
+
+    private sealed class StringTupleComparer : IComparer<(string SchemaName, string ObjectName)>
+    {
+        public static readonly StringTupleComparer Instance = new();
+        public int Compare((string SchemaName, string ObjectName) left, (string SchemaName, string ObjectName) right)
+        {
+            var schema = StringComparer.OrdinalIgnoreCase.Compare(left.SchemaName, right.SchemaName);
+            return schema != 0 ? schema : StringComparer.OrdinalIgnoreCase.Compare(left.ObjectName, right.ObjectName);
+        }
     }
 
     private async Task<string?> ResolveSourceConnectionAsync(int serverId, CancellationToken token)

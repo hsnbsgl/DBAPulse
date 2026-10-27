@@ -136,6 +136,11 @@ app.MapGet("/api/live/requests", async (int serverId, LiveOperationsStore store,
 app.MapGet("/api/live/who-is-active", async (int serverId, LiveOperationsStore store, CancellationToken token) => Results.Ok(await store.GetWhoIsActiveAsync(serverId, token)));
 app.MapGet("/api/live/connections", async (int serverId, LiveOperationsStore store, CancellationToken token) => Results.Ok(await store.GetConnectionsAsync(serverId, token)));
 app.MapGet("/api/live/object-explorer", async (int serverId, string databaseName, LiveOperationsStore store, CancellationToken token) => Results.Ok(await store.GetObjectExplorerAsync(serverId, databaseName, token)));
+app.MapGet("/api/live/object-definition", async (int serverId, string databaseName, string schemaName, string objectName, string objectType, LiveOperationsStore store, CancellationToken token) =>
+{
+    var definition = await store.GetObjectDefinitionAsync(serverId, databaseName, schemaName, objectName, objectType, token);
+    return definition is null ? Results.NotFound() : Results.Ok(definition);
+});
 app.MapGet("/api/operations/overview", async (int? hours, OperationsStore store, CancellationToken token) => Results.Ok(await store.GetOverviewAsync(OperationsStore.AllowedHours(hours ?? 24), token)));
 app.MapGet("/api/operations/events", async (DateTimeOffset? fromUtc, DateTimeOffset? toUtc, string? status, string? severity, string? eventType, int? serverId, int? databaseId, int? page, int? pageSize, OperationsStore store, CancellationToken token) => Results.Ok(await store.ListAsync(fromUtc, toUtc, status, severity, eventType, serverId, databaseId, Math.Max(1, page ?? 1), Math.Clamp(pageSize ?? 50, 1, 100), token)));
 app.MapGet("/api/operations/events/{id:long}", async (long id, OperationsStore store, CancellationToken token) => { var value = await store.DetailAsync(id, token); return value is null ? Results.NotFound() : Results.Ok(value); });
