@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
-import { Alert, AppBar, Box, ButtonBase, Chip, CircularProgress, Collapse, Divider, Drawer, FormControl, IconButton, List, ListItemButton, ListItemIcon, ListItemText, MenuItem, Paper, Select, Stack, Toolbar, Tooltip, Typography } from '@mui/material';
+import { Alert, AppBar, Box, ButtonBase, Chip, CircularProgress, Collapse, Divider, Drawer, FormControl, IconButton, List, ListItemButton, ListItemIcon, ListItemText, MenuItem, Paper, Select, Stack, Tab, Tabs, Toolbar, Tooltip, Typography } from '@mui/material';
 import DnsIcon from '@mui/icons-material/Dns';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
@@ -38,6 +38,22 @@ type ObjectExplorerItem = { schemaName: string; objectName: string };
 type ObjectExplorerSnapshot = { tables: ObjectExplorerItem[]; procedures: ObjectExplorerItem[]; views: ObjectExplorerItem[]; functions: ObjectExplorerItem[] };
 type SelectedObject = { serverId: number; databaseName: string; schemaName: string; objectName: string; objectType: string };
 type ObjectDefinition = SelectedObject & { definition: string };
+
+const sqlKeywordPattern = /(--[^\n]*|\/\*[\s\S]*?\*\/|'(?:''|[^'])*'|"(?:""|[^"])*"|\b(?:SELECT|FROM|WHERE|JOIN|INNER|LEFT|RIGHT|FULL|OUTER|ON|AS|AND|OR|NOT|NULL|CREATE|ALTER|DROP|TABLE|VIEW|PROCEDURE|FUNCTION|RETURNS|BEGIN|END|IF|ELSE|CASE|WHEN|THEN|WITH|GROUP|BY|ORDER|HAVING|UNION|ALL|INSERT|INTO|VALUES|UPDATE|DELETE|EXEC|DECLARE|SET|RETURN|PRIMARY|KEY|FOREIGN|REFERENCES|INDEX|INCLUDE|OVER|PARTITION|CROSS|APPLY|TOP|DISTINCT|EXISTS|LIKE|IN|IS|ASC|DESC|GO)\b|\b\d+(?:\.\d+)?\b)/gi;
+function SqlDefinition({ text }: { text: string }) {
+  let cursor = 0;
+  const parts: ReactNode[] = [];
+  for (const match of text.matchAll(sqlKeywordPattern)) {
+    if (match.index === undefined) continue;
+    if (match.index > cursor) parts.push(text.slice(cursor, match.index));
+    const value = match[0];
+    const kind = value.startsWith('--') || value.startsWith('/*') ? 'comment' : value.startsWith("'") || value.startsWith('"') ? 'string' : /^\d/.test(value) ? 'number' : 'keyword';
+    parts.push(<Box component="span" className={`sql-token-${kind}`} key={`${match.index}-${value}`}>{value}</Box>);
+    cursor = match.index + value.length;
+  }
+  if (cursor < text.length) parts.push(text.slice(cursor));
+  return <>{parts}</>;
+}
 
 const healthTone = (status: string) => {
   const normalized = status.toLowerCase();
@@ -148,9 +164,13 @@ export default function AppShell({ activeView, onNavigate, onServerSelect, theme
   const [serversOpen, setServersOpen] = useState(active === 'estate');
   const [selectedServerId, setSelectedServerId] = useState(0);
   const [selectedObject, setSelectedObject] = useState<SelectedObject>();
+  const [objectTab, setObjectTab] = useState<'definition' | 'ai'>('definition');
   const [definition, setDefinition] = useState<ObjectDefinition>();
   const [definitionLoading, setDefinitionLoading] = useState(false);
   const [definitionError, setDefinitionError] = useState('');
+  const [objectAi, setObjectAi] = useState<string>();
+  const [objectAiLoading, setObjectAiLoading] = useState(false);
+  const [objectAiError, setObjectAiError] = useState('');
   useEffect(() => {
     const base = import.meta.env.VITE_API_BASE_URL || '/api';
     Promise.all([fetch(`${base}/servers`), fetch(`${base}/management/health`)]).then(async ([serverResponse, healthResponse]) => {
@@ -163,13 +183,20 @@ export default function AppShell({ activeView, onNavigate, onServerSelect, theme
   }, []);
   useEffect(() => { if (active === 'estate') setServersOpen(true); }, [active]);
   useEffect(() => {
-    if (!selectedObject) { setDefinition(undefined); return; }
+    if (!selectedObject) { setDefinition(undefined); setObjectAi(undefined); return; }
     const controller = new AbortController();
     const query = new URLSearchParams({ serverId: String(selectedObject.serverId), databaseName: selectedObject.databaseName, schemaName: selectedObject.schemaName, objectName: selectedObject.objectName, objectType: selectedObject.objectType });
     setDefinitionLoading(true); setDefinitionError('');
     fetch(`${import.meta.env.VITE_API_BASE_URL || '/api'}/live/object-definition?${query}`, { signal: controller.signal }).then(async response => { if (!response.ok) throw new Error(`API request failed (${response.status})`); return response.json() as Promise<ObjectDefinition>; }).then(setDefinition).catch(error => { if (error.name !== 'AbortError') { setDefinition(undefined); setDefinitionError(error instanceof Error ? error.message : String(error)); } }).finally(() => { if (!controller.signal.aborted) setDefinitionLoading(false); });
     return () => controller.abort();
   }, [selectedObject]);
+  useEffect(() => {
+    if (!selectedObject || objectTab !== 'ai') return;
+    const controller = new AbortController();
+    setObjectAiLoading(true); setObjectAiError(''); setObjectAi(undefined);
+    fetch(`${import.meta.env.VITE_API_BASE_URL || '/api'}/live/object-ai-summary`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(selectedObject), signal: controller.signal }).then(async response => { if (!response.ok) throw new Error(`API request failed (${response.status})`); return response.json() as Promise<{ summary?: string; error?: string }>; }).then(value => { if (value.error) setObjectAiError(value.error); else setObjectAi(value.summary || 'AI response did not contain text.'); }).catch(error => { if (error.name !== 'AbortError') setObjectAiError(error instanceof Error ? error.message : String(error)); }).finally(() => { if (!controller.signal.aborted) setObjectAiLoading(false); });
+    return () => controller.abort();
+  }, [selectedObject, objectTab]);
   const showServerSelector = !['dashboard', 'estate', 'server', 'database', 'settings'].includes(activeView);
   return <ServerFilterContext.Provider value={{ selectedServerId, setSelectedServerId, servers }}><Box className="app-shell">
     <AppBar position="fixed" className="topbar"><Toolbar>
@@ -181,8 +208,8 @@ export default function AppShell({ activeView, onNavigate, onServerSelect, theme
       <Tooltip title={themeMode === 'dark' ? 'Açık temaya geç' : 'Koyu temaya geç'}><IconButton className="theme-toggle" size="small" onClick={onToggleTheme} aria-label={themeMode === 'dark' ? 'Açık temaya geç' : 'Koyu temaya geç'}>{themeMode === 'dark' ? <LightModeIcon fontSize="small" /> : <DarkModeIcon fontSize="small" />}</IconButton></Tooltip><Typography className="identity-label">anonymous</Typography>
     </Toolbar></AppBar>
     <Drawer variant="permanent" className="drawer"><ButtonBase className="drawer-brand" onClick={() => onNavigate('dashboard')} aria-label="SQL Server ana ekrana dön"><SqlServerLogo /></ButtonBase>
-      <List className="nav-list">{nav.map(item => item.key === 'estate' ? <Box key={item.key} className="estate-nav-group"><ListItemButton className="estate-nav-item" selected={active === item.key || active === 'dashboard'} onClick={() => { onNavigate(item.target || item.key); setServersOpen(open => !open); }}><ListItemIcon>{item.icon}</ListItemIcon><ListItemText primary={item.label} /><Box className="nav-expand-icon">{serversOpen ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}</Box></ListItemButton><Collapse in={serversOpen} timeout="auto" unmountOnExit><ObjectExplorer servers={servers} onServerSelect={serverId => { setSelectedServerId(serverId); onServerSelect?.(serverId); }} onObjectSelect={setSelectedObject} /></Collapse></Box> : <ListItemButton key={item.key} selected={active === item.key} onClick={() => onNavigate(item.target || item.key)}><ListItemIcon>{item.icon}</ListItemIcon><ListItemText primary={item.label} /></ListItemButton>)}</List>
+      <List className="nav-list">{nav.map(item => item.key === 'estate' ? <Box key={item.key} className="estate-nav-group"><ListItemButton className="estate-nav-item" selected={active === item.key || active === 'dashboard'} onClick={() => { onNavigate(item.target || item.key); setServersOpen(open => !open); }}><ListItemIcon>{item.icon}</ListItemIcon><ListItemText primary={item.label} /><Box className="nav-expand-icon">{serversOpen ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}</Box></ListItemButton><Collapse in={serversOpen} timeout="auto" unmountOnExit><ObjectExplorer servers={servers} onServerSelect={serverId => { setSelectedServerId(serverId); onServerSelect?.(serverId); }} onObjectSelect={object => { setSelectedObject(object); setObjectTab('definition'); }} /></Collapse></Box> : <ListItemButton key={item.key} selected={active === item.key} onClick={() => onNavigate(item.target || item.key)}><ListItemIcon>{item.icon}</ListItemIcon><ListItemText primary={item.label} /></ListItemButton>)}</List>
     </Drawer>
-      <Box component="main" className="main"><Box className="content">{(selectedObject || definitionLoading || definitionError) && <Paper className="panel" sx={{ mb: 2 }}><Stack direction="row" justifyContent="space-between" alignItems="center"><Box><Typography variant="h6">{selectedObject ? `${selectedObject.schemaName}.${selectedObject.objectName}` : 'Object definition'}</Typography>{selectedObject && <Typography variant="caption" color="text.secondary">{selectedObject.databaseName} · {selectedObject.objectType}</Typography>}</Box>{selectedObject && <IconButton size="small" onClick={() => { setSelectedObject(undefined); setDefinition(undefined); }} aria-label="Close object definition"><CloseIcon fontSize="small" /></IconButton>}</Stack><Divider sx={{ my: 1.5 }} />{definitionLoading ? <CircularProgress size={22} /> : definitionError ? <Alert severity="error">{definitionError}</Alert> : definition && <Box component="pre" sx={{ m: 0, p: 2, maxHeight: '55vh', overflow: 'auto', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace', fontSize: 12, lineHeight: 1.55, borderRadius: 1, bgcolor: 'action.hover' }}>{definition.definition}</Box>}</Paper>}{children}</Box></Box>
+      <Box component="main" className="main"><Box className="content">{selectedObject && <Paper className="panel object-detail-panel" sx={{ mb: 2 }}><Stack direction="row" justifyContent="space-between" alignItems="center"><Box><Typography variant="h6">{selectedObject.schemaName}.{selectedObject.objectName}</Typography><Typography variant="caption" color="text.secondary">{selectedObject.databaseName} · {selectedObject.objectType}</Typography></Box><IconButton size="small" onClick={() => { setSelectedObject(undefined); setDefinition(undefined); }} aria-label="Close object definition"><CloseIcon fontSize="small" /></IconButton></Stack><Tabs value={objectTab} onChange={(_, value) => setObjectTab(value)} sx={{ mt: 1 }}><Tab value="definition" label="Definition" /><Tab value="ai" label="AI Summary" /></Tabs><Divider sx={{ my: 1.5 }} />{objectTab === 'definition' && (definitionLoading ? <CircularProgress size={22} /> : definitionError ? <Alert severity="error">{definitionError}</Alert> : definition && <Box component="pre" className="sql-definition" sx={{ m: 0, p: 2, maxHeight: '62vh', overflow: 'auto', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace', fontSize: 12, lineHeight: 1.55, borderRadius: 1, bgcolor: 'action.hover' }}><SqlDefinition text={definition.definition} /></Box>)}{objectTab === 'ai' && (objectAiLoading ? <Stack direction="row" spacing={1} alignItems="center"><CircularProgress size={22} /><Typography color="text.secondary">Object performance analysis is being generated…</Typography></Stack> : objectAiError ? <Alert severity="info">{objectAiError} <a href="?view=settings">Open Settings</a></Alert> : <Box className="ai-summary-content" sx={{ whiteSpace: 'pre-wrap' }}>{objectAi || 'Generating summary…'}</Box>)}</Paper>}{!selectedObject && children}</Box></Box>
   </Box></ServerFilterContext.Provider>;
 }

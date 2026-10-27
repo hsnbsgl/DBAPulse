@@ -24,6 +24,7 @@ public sealed record LiveConnectionsSnapshot(int ActiveConnectionCount, int Dist
 public sealed record ObjectExplorerItem(string SchemaName, string ObjectName);
 public sealed record ObjectExplorerSnapshot(IReadOnlyList<ObjectExplorerItem> Tables, IReadOnlyList<ObjectExplorerItem> Procedures, IReadOnlyList<ObjectExplorerItem> Views, IReadOnlyList<ObjectExplorerItem> Functions);
 public sealed record ObjectDefinition(string SchemaName, string ObjectName, string ObjectType, string Definition);
+public sealed record ObjectDefinitionRequest(int ServerId, string DatabaseName, string SchemaName, string ObjectName, string ObjectType);
 
 public sealed class LiveOperationsStore
 {
@@ -189,7 +190,6 @@ public sealed class LiveOperationsStore
         if (sourceConnection is null)
             throw new InvalidOperationException($"No live source connection is configured for server {serverId}.");
 
-        var databaseConnection = new SqlConnectionStringBuilder(sourceConnection) { InitialCatalog = databaseName }.ConnectionString;
         const string sql = """
             SELECT
                 CASE
@@ -198,16 +198,18 @@ public sealed class LiveOperationsStore
                     WHEN o.type = 'V' THEN N'View'
                     WHEN o.type IN ('FN', 'IF', 'TF', 'FS', 'FT') THEN N'Function'
                 END AS object_type,
-                SCHEMA_NAME(o.schema_id) AS schema_name,
+                s.name AS schema_name,
                 o.name AS object_name
-            FROM sys.objects AS o
+            FROM {0}.sys.objects AS o
+            INNER JOIN {0}.sys.schemas AS s ON s.schema_id = o.schema_id
             WHERE o.is_ms_shipped = 0
               AND o.type IN ('U', 'P', 'PC', 'V', 'FN', 'IF', 'TF', 'FS', 'FT');
             """;
 
-        await using var connection = new SqlConnection(databaseConnection);
+        var masterConnection = new SqlConnectionStringBuilder(sourceConnection) { InitialCatalog = "master" }.ConnectionString;
+        await using var connection = new SqlConnection(masterConnection);
         await connection.OpenAsync(token);
-        await using var command = new SqlCommand(sql, connection) { CommandTimeout = 15 };
+        await using var command = new SqlCommand(string.Format(sql, QuoteIdentifier(databaseName)), connection) { CommandTimeout = 15 };
         await using var reader = await command.ExecuteReaderAsync(token);
         var tables = new List<ObjectExplorerItem>();
         var procedures = new List<ObjectExplorerItem>();

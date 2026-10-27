@@ -141,6 +141,11 @@ app.MapGet("/api/live/object-definition", async (int serverId, string databaseNa
     var definition = await store.GetObjectDefinitionAsync(serverId, databaseName, schemaName, objectName, objectType, token);
     return definition is null ? Results.NotFound() : Results.Ok(definition);
 });
+app.MapPost("/api/live/object-ai-summary", async (ObjectDefinitionRequest request, LiveOperationsStore store, AiSummaryService service, CancellationToken token) =>
+{
+    var definition = await store.GetObjectDefinitionAsync(request.ServerId, request.DatabaseName, request.SchemaName, request.ObjectName, request.ObjectType, token);
+    return definition is null ? Results.NotFound() : Results.Ok(await service.SummarizeObjectAsync(definition, token));
+});
 app.MapGet("/api/operations/overview", async (int? hours, OperationsStore store, CancellationToken token) => Results.Ok(await store.GetOverviewAsync(OperationsStore.AllowedHours(hours ?? 24), token)));
 app.MapGet("/api/operations/events", async (DateTimeOffset? fromUtc, DateTimeOffset? toUtc, string? status, string? severity, string? eventType, int? serverId, int? databaseId, int? page, int? pageSize, OperationsStore store, CancellationToken token) => Results.Ok(await store.ListAsync(fromUtc, toUtc, status, severity, eventType, serverId, databaseId, Math.Max(1, page ?? 1), Math.Clamp(pageSize ?? 50, 1, 100), token)));
 app.MapGet("/api/operations/events/{id:long}", async (long id, OperationsStore store, CancellationToken token) => { var value = await store.DetailAsync(id, token); return value is null ? Results.NotFound() : Results.Ok(value); });

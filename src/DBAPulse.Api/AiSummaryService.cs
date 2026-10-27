@@ -103,6 +103,38 @@ public sealed class AiSummaryService
         catch (HttpRequestException ex) { _logger.LogWarning(ex, "AI summary network/TLS error for {BaseUrl}", settings.BaseUrl); return new(true, settings.Provider, settings.Model, string.Empty, $"AI provider network/TLS error: {ex.Message}"); }
         catch (JsonException ex) { _logger.LogWarning(ex, "AI provider returned invalid JSON for {BaseUrl}", settings.BaseUrl); return new(true, settings.Provider, settings.Model, string.Empty, "AI provider returned an invalid response."); }
     }
+
+    public async Task<AiSummaryResponse> SummarizeObjectAsync(ObjectDefinition definition, CancellationToken token)
+    {
+        var settings = _settings.Current;
+        var apiKey = NormalizeApiKey(settings.ApiKey);
+        if (apiKey.Any(c => c > 127)) return new(true, settings.Provider, settings.Model, string.Empty, "API key contains non-ASCII characters. Re-enter it without spaces or line breaks.");
+        if (string.Equals(settings.Provider, "none", StringComparison.OrdinalIgnoreCase) || string.IsNullOrWhiteSpace(apiKey)) return new(false, settings.Provider, settings.Model, string.Empty, "AI provider is not configured. Open Settings and add an API key.");
+
+        var source = definition.Definition.Length > 60000 ? definition.Definition[..60000] + "\n-- Definition truncated for analysis." : definition.Definition;
+        var prompt = $"You are a senior SQL Server performance engineer. Analyze this {definition.ObjectType} definition in Turkish. Object: [{definition.SchemaName}].[{definition.ObjectName}]. Provide sections: Genel Değerlendirme, Performans Riskleri, Önerilen İyileştirmeler. Focus on indexes, SARGability, joins, filters, cardinality, parameter sensitivity, locking, I/O and maintainability as applicable. Distinguish observed facts from hypotheses. Do not invent execution plans or runtime metrics. Give safe, actionable read-only recommendations and explicitly state what should be verified with Query Store or an execution plan. Do not recommend destructive actions such as KILL, data deletion or automatic configuration changes. Definition:\n```sql\n{source}\n```";
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, Endpoint(settings));
+            if (IsGemini(settings)) request.Headers.TryAddWithoutValidation("x-goog-api-key", apiKey); else request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+            object payload = IsGemini(settings)
+                ? new { contents = new[] { new { parts = new[] { new { text = prompt } } } }, generationConfig = new { temperature = 0.2 } }
+                : string.Equals(settings.Protocol, "chat-completions", StringComparison.OrdinalIgnoreCase)
+                    ? new { model = settings.Model, messages = new[] { new { role = "user", content = prompt } }, temperature = 0.2 }
+                    : new { model = settings.Model, input = prompt, store = false };
+            request.Content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
+            using var response = await _http.SendAsync(request, token);
+            var body = await response.Content.ReadAsStringAsync(token);
+            if (!response.IsSuccessStatusCode) return new(true, settings.Provider, settings.Model, string.Empty, $"AI request failed ({(int)response.StatusCode}).");
+            using var json = JsonDocument.Parse(body);
+            var text = IsGemini(settings) ? ExtractGeminiText(json.RootElement) : json.RootElement.TryGetProperty("output_text", out var output) ? output.GetString() : string.Equals(settings.Protocol, "chat-completions", StringComparison.OrdinalIgnoreCase) ? ExtractChatText(json.RootElement) : ExtractText(json.RootElement);
+            return new(true, settings.Provider, settings.Model, text ?? "AI response did not contain text.", null);
+        }
+        catch (TaskCanceledException ex) when (!token.IsCancellationRequested) { _logger.LogWarning(ex, "Object AI summary request timed out for {BaseUrl}", settings.BaseUrl); return new(true, settings.Provider, settings.Model, string.Empty, "AI provider request timed out."); }
+        catch (HttpRequestException ex) { _logger.LogWarning(ex, "Object AI summary network/TLS error for {BaseUrl}", settings.BaseUrl); return new(true, settings.Provider, settings.Model, string.Empty, $"AI provider network/TLS error: {ex.Message}"); }
+        catch (JsonException ex) { _logger.LogWarning(ex, "AI provider returned invalid object summary JSON for {BaseUrl}", settings.BaseUrl); return new(true, settings.Provider, settings.Model, string.Empty, "AI provider returned an invalid response."); }
+    }
+
     public async Task StreamSummarizeAsync(int serverId, Stream output, CancellationToken token)
     {
         var settings = _settings.Current;
