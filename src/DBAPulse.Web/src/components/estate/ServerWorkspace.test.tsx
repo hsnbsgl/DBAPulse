@@ -49,6 +49,7 @@ const serverDetail = {
 const responseFor = (path: string) => {
   if (path === '/servers/1') return serverDetail;
   if (path.startsWith('/live/connections')) return { activeConnectionCount: 0, distinctApplicationCount: 0, applications: [] };
+  if (path.startsWith('/live/who-is-active')) return [];
   if (path.startsWith('/performance/')) return [];
   if (path === '/management/health') return [];
   return page;

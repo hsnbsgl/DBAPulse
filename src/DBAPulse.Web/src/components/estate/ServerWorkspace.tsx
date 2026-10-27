@@ -36,6 +36,7 @@ type Blocking = { id: number; capturedAtUtc: string; serverName: string; databas
 type Deadlock = { id: number; occurredAtUtc: string; serverName: string; databaseName?: string; processCount: number; victimProcessId?: string };
 type LongRunning = { id: number; capturedAtUtc: string; serverName: string; databaseName?: string; sessionId: number; elapsedMs: number; status?: string; waitType?: string; applicationName?: string };
 type LiveRequest = { sessionId: number; blockingSessionId?: number; databaseName?: string; status: string; command: string; cpuTimeMs: number; elapsedMs: number; waitType?: string; waitTimeMs: number; loginName?: string; hostName?: string; applicationName?: string; startTimeUtc: string; sqlText?: string };
+type WhoIsActiveRow = Record<string, unknown>;
 type LiveConnectionsSnapshot = { activeConnectionCount: number; distinctApplicationCount: number; applications: Array<{ applicationName: string; connectionCount: number }> };
 type OperationalEvent = { id: number; eventType: string; serverName: string; databaseName?: string; startedAtUtc: string; lastSeenAtUtc: string; status: string; severity: string; durationMs: number; title: string };
 type Anomaly = { id: number; metricType: string; databaseName?: string; entityKey?: string; observedAtUtc: string; observedValue: number; baselineMedian: number; baselineP95: number; deviationRatio?: number; modifiedZScore?: number; baselineScope: string; sampleCount: number; severity: string; status: string; explanationCode: string; startedAtUtc: string; lastSeenAtUtc: string };
@@ -337,23 +338,36 @@ function AiSummaryTab({ serverId }: { serverId: number }) {
 
 function LiveOperationsPanel({ serverId }: { serverId: number }) {
   const [rows, setRows] = useState<LiveRequest[]>([]);
+  const [whoIsActiveRows, setWhoIsActiveRows] = useState<WhoIsActiveRow[]>([]);
   const [error, setError] = useState('');
   const [updatedAt, setUpdatedAt] = useState<Date>();
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const load = async () => {
+    setIsRefreshing(true);
+    try {
+      const [requestRows, whoIsActive] = await Promise.all([
+        get<LiveRequest[]>(`/live/requests?serverId=${serverId}`),
+        get<WhoIsActiveRow[]>(`/live/who-is-active?serverId=${serverId}`),
+      ]);
+      setRows(requestRows);
+      setWhoIsActiveRows(whoIsActive);
+      setError('');
+      setUpdatedAt(new Date());
+    } catch (exception) {
+      setError(exception instanceof Error ? exception.message : String(exception));
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
   useEffect(() => {
     let cancelled = false;
-    const load = async () => {
-      try {
-        const value = await get<LiveRequest[]>(`/live/requests?serverId=${serverId}`);
-        if (!cancelled) { setRows(value); setError(''); setUpdatedAt(new Date()); }
-      } catch (exception) {
-        if (!cancelled) setError(exception instanceof Error ? exception.message : String(exception));
-      }
-    };
     void load();
-    const timer = window.setInterval(() => { void load(); }, 15_000);
+    const timer = window.setInterval(() => { if (!cancelled) void load(); }, 15_000);
     return () => { cancelled = true; window.clearInterval(timer); };
   }, [serverId]);
-  return <Paper className="panel"><Stack direction="row" justifyContent="space-between" alignItems="center"><Box><Typography variant="h6">Live Operations</Typography><Typography variant="caption" color="text.secondary">Direct source query · refreshes every 15 seconds{updatedAt ? ` · ${updatedAt.toLocaleTimeString()}` : ''}</Typography></Box><Chip label={`${rows.length} active`} color={rows.length ? 'warning' : 'success'} variant="outlined" /></Stack><Divider sx={{ my: 1.5 }} />{error ? <Alert severity="info">Live data unavailable: {error}</Alert> : rows.length ? <Table size="small"><TableHead><TableRow><TableCell>Session</TableCell><TableCell>Database</TableCell><TableCell>Status / Command</TableCell><TableCell>Elapsed</TableCell><TableCell>Wait</TableCell><TableCell>Application</TableCell></TableRow></TableHead><TableBody>{rows.map(row => <TableRow key={row.sessionId}><TableCell>{row.sessionId}{row.blockingSessionId ? ` · blocked by ${row.blockingSessionId}` : ''}</TableCell><TableCell>{row.databaseName || 'N/A'}</TableCell><TableCell>{row.status} · {row.command}</TableCell><TableCell>{row.elapsedMs.toLocaleString()} ms</TableCell><TableCell>{row.waitType ? `${row.waitType} · ${row.waitTimeMs.toLocaleString()} ms` : '—'}</TableCell><TableCell>{row.applicationName || row.hostName || row.loginName || 'N/A'}</TableCell></TableRow>)}</TableBody></Table> : <Typography color="text.secondary">No active requests.</Typography>}</Paper>;
+  const whoIsActiveColumns = Array.from(new Set(whoIsActiveRows.flatMap(row => Object.keys(row))));
+  const cellValue = (value: unknown) => value == null ? '—' : typeof value === 'object' ? JSON.stringify(value) : String(value);
+  return <Paper className="panel"><Stack direction="row" justifyContent="space-between" alignItems="center"><Box><Typography variant="h6">Live Operations</Typography><Typography variant="caption" color="text.secondary">Direct source query · refreshes every 15 seconds{updatedAt ? ` · ${updatedAt.toLocaleTimeString()}` : ''}</Typography></Box><Stack direction="row" spacing={1} alignItems="center"><Button size="small" variant="outlined" onClick={() => void load()} disabled={isRefreshing}>{isRefreshing ? 'Refreshing…' : 'Refresh'}</Button><Chip label={`${whoIsActiveRows.length} active`} color={whoIsActiveRows.length ? 'warning' : 'success'} variant="outlined" /></Stack></Stack><Divider sx={{ my: 1.5 }} />{error ? <Alert severity="info">Live data unavailable: {error}</Alert> : <Stack spacing={2}><Box><Typography variant="subtitle2" sx={{ mb: 1 }}>sp_WhoIsActive</Typography>{whoIsActiveRows.length ? <Box sx={{ overflowX: 'auto' }}><Table size="small"><TableHead><TableRow>{whoIsActiveColumns.map(column => <TableCell key={column}>{column}</TableCell>)}</TableRow></TableHead><TableBody>{whoIsActiveRows.map((row, index) => <TableRow key={String(row.session_id ?? row.sessionId ?? index)}>{whoIsActiveColumns.map(column => <TableCell key={column} sx={{ whiteSpace: 'nowrap', maxWidth: 420 }}>{cellValue(row[column])}</TableCell>)}</TableRow>)}</TableBody></Table></Box> : <Typography color="text.secondary">sp_WhoIsActive returned no active sessions.</Typography>}</Box><Box><Typography variant="subtitle2" sx={{ mb: 1 }}>Active requests</Typography>{rows.length ? <Table size="small"><TableHead><TableRow><TableCell>Session</TableCell><TableCell>Database</TableCell><TableCell>Status / Command</TableCell><TableCell>Elapsed</TableCell><TableCell>Wait</TableCell><TableCell>Application</TableCell></TableRow></TableHead><TableBody>{rows.map(row => <TableRow key={row.sessionId}><TableCell>{row.sessionId}{row.blockingSessionId ? ` · blocked by ${row.blockingSessionId}` : ''}</TableCell><TableCell>{row.databaseName || 'N/A'}</TableCell><TableCell>{row.status} · {row.command}</TableCell><TableCell>{row.elapsedMs.toLocaleString()} ms</TableCell><TableCell>{row.waitType ? `${row.waitType} · ${row.waitTimeMs.toLocaleString()} ms` : '—'}</TableCell><TableCell>{row.applicationName || row.hostName || row.loginName || 'N/A'}</TableCell></TableRow>)}</TableBody></Table> : <Typography color="text.secondary">No active requests.</Typography>}</Box></Stack>}</Paper>;
 }
 
 function PerformanceTab({ data }: { data: WorkspaceData }) {

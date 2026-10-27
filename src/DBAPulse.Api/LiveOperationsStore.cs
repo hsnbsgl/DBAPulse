@@ -91,6 +91,28 @@ public sealed class LiveOperationsStore
         return rows;
     }
 
+    public async Task<IReadOnlyList<IReadOnlyDictionary<string, object?>>> GetWhoIsActiveAsync(int serverId, CancellationToken token)
+    {
+        var sourceConnection = await ResolveSourceConnectionAsync(serverId, token);
+        if (sourceConnection is null)
+            throw new InvalidOperationException($"No live source connection is configured for server {serverId}.");
+
+        await using var connection = new SqlConnection(sourceConnection);
+        await connection.OpenAsync(token);
+        await using var command = new SqlCommand("EXEC master.dbo.sp_WhoIsActive;", connection) { CommandTimeout = 10 };
+        await using var reader = await command.ExecuteReaderAsync(token);
+        var rows = new List<IReadOnlyDictionary<string, object?>>();
+        while (await reader.ReadAsync(token) && rows.Count < 100)
+        {
+            var row = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+            for (var index = 0; index < reader.FieldCount; index++)
+                row[reader.GetName(index)] = NormalizeWhoIsActiveValue(reader.GetValue(index));
+            rows.Add(row);
+        }
+
+        return rows;
+    }
+
     public async Task<LiveConnectionsSnapshot> GetConnectionsAsync(int serverId, CancellationToken token)
     {
         const string sql = """
@@ -151,4 +173,13 @@ public sealed class LiveOperationsStore
     private static string String(SqlDataReader reader, string name) => Convert.ToString(reader[name]) ?? string.Empty;
     private static string? NullableString(SqlDataReader reader, string name) => reader.IsDBNull(reader.GetOrdinal(name)) ? null : Convert.ToString(reader[name]);
     private static int? NullableInt(SqlDataReader reader, string name) => reader.IsDBNull(reader.GetOrdinal(name)) ? null : Convert.ToInt32(reader[name]);
+
+    private static object? NormalizeWhoIsActiveValue(object value) => value switch
+    {
+        DBNull => null,
+        byte[] bytes => Convert.ToBase64String(bytes),
+        DateTime dateTime => DateTime.SpecifyKind(dateTime, DateTimeKind.Utc),
+        DateTimeOffset dateTimeOffset => dateTimeOffset,
+        _ => value,
+    };
 }

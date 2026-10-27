@@ -84,10 +84,12 @@ Server Telemetry ekranı sunucu özetini önce gösterir; kapasite, backup, perf
 job, operasyon ve anomaly verileri arka planda yüklenir. İlk açılıştan sonra bu bölümlerin kısa
 bir süre içinde güncellenmesi normaldir.
 
-Performance sekmesindeki **Live Operations** paneli aktif SQL request ve blocking verisini kaynak
-SQL Server’dan doğrudan okur ve yaklaşık 15 saniyede bir yeniler. Bu özellik için API’nin
+Performance sekmesindeki **Live Operations** paneli `master.dbo.sp_WhoIsActive` sonucu ile aktif SQL
+request ve blocking verisini kaynak SQL Server’dan doğrudan okur ve yaklaşık 15 saniyede bir yeniler.
+Paneldeki **Refresh** düğmesi manuel yenileme sağlar. Bu özellik için API’nin
 `DBAPULSE_SOURCE_CONNECTION` ayarı ve kaynak login üzerinde `VIEW SERVER STATE` (SQL Server 2019
 ve öncesi) veya `VIEW SERVER PERFORMANCE STATE` (SQL Server 2022+) yetkisi gerekir.
+`sp_WhoIsActive` yordamı kaynak SQL Server’ın `master` veritabanında kurulu olmalıdır.
 Yetki yoksa snapshot tabanlı performance listeleri çalışmaya devam eder; canlı panel bilgi mesajı
 gösterir.
 
