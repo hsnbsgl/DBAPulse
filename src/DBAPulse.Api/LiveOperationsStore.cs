@@ -21,6 +21,8 @@ public sealed record LiveRequestRow(
 
 public sealed record LiveConnectionApplicationRow(string ApplicationName, int ConnectionCount);
 public sealed record LiveConnectionsSnapshot(int ActiveConnectionCount, int DistinctApplicationCount, IReadOnlyList<LiveConnectionApplicationRow> Applications);
+public sealed record ObjectExplorerItem(string SchemaName, string ObjectName);
+public sealed record ObjectExplorerSnapshot(IReadOnlyList<ObjectExplorerItem> Tables, IReadOnlyList<ObjectExplorerItem> Procedures, IReadOnlyList<ObjectExplorerItem> Views, IReadOnlyList<ObjectExplorerItem> Functions);
 
 public sealed class LiveOperationsStore
 {
@@ -175,6 +177,58 @@ public sealed class LiveOperationsStore
             applications.Add(new(String(reader, "application_name"), Convert.ToInt32(reader["connection_count"])));
 
         return new(applications.Sum(row => row.ConnectionCount), applications.Count, applications);
+    }
+
+    public async Task<ObjectExplorerSnapshot> GetObjectExplorerAsync(int serverId, string databaseName, CancellationToken token)
+    {
+        if (string.IsNullOrWhiteSpace(databaseName) || databaseName.Length > 128)
+            throw new ArgumentException("A valid database name is required.", nameof(databaseName));
+
+        var sourceConnection = await ResolveSourceConnectionAsync(serverId, token);
+        if (sourceConnection is null)
+            throw new InvalidOperationException($"No live source connection is configured for server {serverId}.");
+
+        var databaseConnection = new SqlConnectionStringBuilder(sourceConnection) { InitialCatalog = databaseName }.ConnectionString;
+        const string sql = """
+            SELECT N'Table' AS object_type, SCHEMA_NAME(t.schema_id) AS schema_name, t.name AS object_name
+            FROM sys.tables AS t
+            WHERE t.is_ms_shipped = 0
+            UNION ALL
+            SELECT N'Procedure', SCHEMA_NAME(p.schema_id), p.name
+            FROM sys.procedures AS p
+            WHERE p.is_ms_shipped = 0
+            UNION ALL
+            SELECT N'View', SCHEMA_NAME(v.schema_id), v.name
+            FROM sys.views AS v
+            WHERE v.is_ms_shipped = 0
+            UNION ALL
+            SELECT N'Function', SCHEMA_NAME(o.schema_id), o.name
+            FROM sys.objects AS o
+            WHERE o.is_ms_shipped = 0 AND o.type IN ('FN', 'IF', 'TF', 'FS', 'FT')
+            ORDER BY object_type, schema_name, object_name;
+            """;
+
+        await using var connection = new SqlConnection(databaseConnection);
+        await connection.OpenAsync(token);
+        await using var command = new SqlCommand(sql, connection) { CommandTimeout = 15 };
+        await using var reader = await command.ExecuteReaderAsync(token);
+        var tables = new List<ObjectExplorerItem>();
+        var procedures = new List<ObjectExplorerItem>();
+        var views = new List<ObjectExplorerItem>();
+        var functions = new List<ObjectExplorerItem>();
+        while (await reader.ReadAsync(token))
+        {
+            var item = new ObjectExplorerItem(String(reader, "schema_name"), String(reader, "object_name"));
+            switch (String(reader, "object_type"))
+            {
+                case "Table": tables.Add(item); break;
+                case "Procedure": procedures.Add(item); break;
+                case "View": views.Add(item); break;
+                case "Function": functions.Add(item); break;
+            }
+        }
+
+        return new(tables, procedures, views, functions);
     }
 
     private async Task<string?> ResolveSourceConnectionAsync(int serverId, CancellationToken token)

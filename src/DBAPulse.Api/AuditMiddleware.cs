@@ -96,7 +96,7 @@ public sealed class AuditMiddleware
         }
         if (parts[1].Equals("live", StringComparison.OrdinalIgnoreCase) && parts.Length >= 3)
         {
-            action = parts[2].Equals("who-is-active", StringComparison.OrdinalIgnoreCase) ? "Performance.LiveWhoIsActive.View" : "Performance.Live.View";
+            action = parts[2].Equals("who-is-active", StringComparison.OrdinalIgnoreCase) ? "Performance.LiveWhoIsActive.View" : parts[2].Equals("object-explorer", StringComparison.OrdinalIgnoreCase) ? "Database.ObjectExplorer.View" : "Performance.Live.View";
             resourceType = "Performance"; return true;
         }
         if (parts[1].Equals("operations", StringComparison.OrdinalIgnoreCase) && parts.Length >= 3)
