@@ -200,16 +200,16 @@ public sealed class LiveOperationsStore
                 END AS object_type,
                 s.name AS schema_name,
                 o.name AS object_name
-            FROM {0}.sys.objects AS o
-            INNER JOIN {0}.sys.schemas AS s ON s.schema_id = o.schema_id
+            FROM sys.objects AS o
+            INNER JOIN sys.schemas AS s ON s.schema_id = o.schema_id
             WHERE o.is_ms_shipped = 0
               AND o.type IN ('U', 'P', 'PC', 'V', 'FN', 'IF', 'TF', 'FS', 'FT');
             """;
 
-        var masterConnection = new SqlConnectionStringBuilder(sourceConnection) { InitialCatalog = "master" }.ConnectionString;
-        await using var connection = new SqlConnection(masterConnection);
+        var databaseConnection = new SqlConnectionStringBuilder(sourceConnection) { InitialCatalog = databaseName }.ConnectionString;
+        await using var connection = new SqlConnection(databaseConnection);
         await connection.OpenAsync(token);
-        await using var command = new SqlCommand(string.Format(sql, QuoteIdentifier(databaseName)), connection) { CommandTimeout = 15 };
+        await using var command = new SqlCommand(sql, connection) { CommandTimeout = 15 };
         await using var reader = await command.ExecuteReaderAsync(token);
         var tables = new List<ObjectExplorerItem>();
         var procedures = new List<ObjectExplorerItem>();

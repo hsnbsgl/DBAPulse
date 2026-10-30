@@ -104,6 +104,35 @@ GRANT SELECT ON OBJECT::[dbo].[sysjobactivity] TO [DBA_PULSE];
 GRANT SELECT ON OBJECT::[dbo].[syssessions] TO [DBA_PULSE];
 GO
 
+/* Object Explorer reads metadata by opening each target database directly. */
+USE [master];
+GO
+
+DECLARE @databaseName sysname;
+DECLARE @sql nvarchar(max);
+DECLARE database_cursor CURSOR LOCAL FAST_FORWARD FOR
+    SELECT name
+    FROM sys.databases
+    WHERE database_id > 4
+      AND state_desc = N'ONLINE'
+      AND is_read_only = 0;
+
+OPEN database_cursor;
+FETCH NEXT FROM database_cursor INTO @databaseName;
+WHILE @@FETCH_STATUS = 0
+BEGIN
+    SET @sql = N'USE ' + QUOTENAME(@databaseName) + N';
+IF DATABASE_PRINCIPAL_ID(N''DBA_PULSE'') IS NULL
+    CREATE USER [DBA_PULSE] FOR LOGIN [DBA_PULSE];
+GRANT CONNECT TO [DBA_PULSE];
+GRANT VIEW DEFINITION TO [DBA_PULSE];';
+    EXEC sys.sp_executesql @sql;
+    FETCH NEXT FROM database_cursor INTO @databaseName;
+END;
+CLOSE database_cursor;
+DEALLOCATE database_cursor;
+GO
+
 /*
     Verification queries (read-only; optional)
 
