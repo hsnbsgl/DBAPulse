@@ -7,7 +7,6 @@ using System.Text;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 
-
 var builder = WebApplication.CreateBuilder(args);
 var apiConnection = builder.Configuration["DBAPULSE_API_CONNECTION"];
 if (string.IsNullOrWhiteSpace(apiConnection)) throw new InvalidOperationException("DBAPULSE_API_CONNECTION is required.");
@@ -60,7 +59,29 @@ builder.Services.AddCors(options => options.AddPolicy("Development", policy => p
 
 var app = builder.Build();
 
-app.UseExceptionHandler();
+app.UseExceptionHandler(exceptionHandlerApp =>
+{
+    exceptionHandlerApp.Run(async context =>
+    {
+        var exception = context.Features
+            .Get<Microsoft.AspNetCore.Diagnostics.IExceptionHandlerFeature>()?
+            .Error;
+
+        context.Response.ContentType = "application/json";
+        context.Response.StatusCode = StatusCodes.Status500InternalServerError;
+
+        var payload = new
+        {
+            error = "An error occurred while processing your request.",
+            detail = exception?.Message ?? "Unknown error",
+            type = exception?.GetType().Name ?? "UnknownException",
+            traceId = context.TraceIdentifier
+        };
+
+        await context.Response.WriteAsJsonAsync(payload);
+    });
+});
+
 if (app.Environment.IsDevelopment()) app.UseCors("Development");
 app.UseAuthentication();
 app.UseAuthorization();
@@ -69,7 +90,17 @@ app.Use(async (context, next) =>
 {
     var isApi = context.Request.Path.StartsWithSegments("/api");
     var isPublic = context.Request.Path.Equals("/api/health") || context.Request.Path.StartsWithSegments("/api/auth");
-    if (isApi && !isPublic && !(context.User.Identity?.IsAuthenticated ?? false)) { context.Response.StatusCode = StatusCodes.Status401Unauthorized; return; }
+    if (isApi && !isPublic && !(context.User.Identity?.IsAuthenticated ?? false))
+    {
+        context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+        context.Response.ContentType = "application/json";
+        await context.Response.WriteAsJsonAsync(new
+        {
+            error = "Authentication required.",
+            detail = "You must sign in to access this endpoint."
+        });
+        return;
+    }
     await next();
 });
 
@@ -108,8 +139,9 @@ app.MapPost("/api/servers/{id:int}/ai-summary/stream", async (int id, AiSummaryS
     response.Headers.CacheControl = "no-cache";
     response.Headers["X-Accel-Buffering"] = "no";
     await service.StreamSummarizeAsync(id, response.Body, token);
-});app.MapGet("/api/settings/ai", (AiSettingsStore store) => Results.Ok(store.View()));
-app.MapPost("/api/settings/ai/test", async (AiSummaryService service, CancellationToken token) => { var result = await service.TestAsync(token); return Results.Ok(new { success = result.Success, message = result.Message }); });
+});
+app.MapGet("/api/settings/ai", (AiSettingsStore store) => Results.Ok(store.View()));
+app.MapPost("/api/settings/ai/test", async (AiSummaryService service, CancellationToken token) => { var result = await service.TestAsync(token); return Results.Ok(new { success = result.Success, message = result.Message, model = result.ModelName }); });
 app.MapPut("/api/settings/ai", (AiSettingsUpdate update, AiSettingsStore store) => { store.Update(update); return Results.Ok(store.View()); });
 app.MapGet("/api/settings/smtp", (SmtpSettingsStore store) => Results.Ok(store.View()));
 app.MapPost("/api/settings/smtp/test", async (SmtpSettingsService service, CancellationToken token) => { var result = await service.TestAsync(token); return Results.Ok(new { success = result.Success, message = result.Message }); });
@@ -124,7 +156,7 @@ app.MapPut("/api/settings/retention", async (RetentionSettingsUpdate update, Ret
 app.MapGet("/api/settings/backup-scope", async (int? serverId, ServerSettingsService service, CancellationToken token) => Results.Ok(await service.ListBackupScopeAsync(serverId, token)));
 app.MapPut("/api/settings/backup-scope/{databaseId:int}", async (int databaseId, BackupScopeUpdate update, ServerSettingsService service, CancellationToken token) => Results.Ok(new { success = await service.UpdateBackupScopeAsync(databaseId, update, token) }));
 app.MapGet("/api/settings/containers", async (ContainerMonitorService service, CancellationToken token) => Results.Ok(await service.ListAsync(token)));
-app.MapGet("/api/settings/containers/{containerId}/logs", async (string containerId, int? tail, ContainerMonitorService service, CancellationToken token) => Results.Ok(new { logs = await service.LogsAsync(containerId, tail ?? 200, token) }));
+app.MapGet("/api/settings/containers/{containerId}/logs", async (string containerId, int? tail, ContainerMonitorService service, CancellationToken token) => Results.Ok(new { logs = await service.GetLogsAsync(containerId, tail ?? 200, token) }));
 app.MapGet("/api/databases", async (int? page, int? pageSize, string? search, DashboardStore store, CancellationToken token) => Results.Ok(await store.GetDatabasesAsync(Math.Max(1, page ?? 1), Math.Clamp(pageSize ?? 50, 1, 100), search, token)));
 app.MapGet("/api/databases/{id:int}", async (int id, DashboardStore store, CancellationToken token) => { var value = await store.GetDatabaseDetailAsync(id, token); return value is null ? Results.NotFound() : Results.Ok(value); });
 app.MapGet("/api/databases/{id:int}/capacity-history", async (int id, int? days, DashboardStore store, CancellationToken token) => Results.Ok(await store.GetCapacityHistoryAsync(id, days ?? 30, token)));
@@ -150,25 +182,26 @@ app.MapPost("/api/live/object-ai-summary", async (ObjectDefinitionRequest reques
     return definition is null ? Results.NotFound() : Results.Ok(await service.SummarizeObjectAsync(definition, token));
 });
 app.MapGet("/api/operations/overview", async (int? hours, OperationsStore store, CancellationToken token) => Results.Ok(await store.GetOverviewAsync(OperationsStore.AllowedHours(hours ?? 24), token)));
-app.MapGet("/api/operations/events", async (DateTimeOffset? fromUtc, DateTimeOffset? toUtc, string? status, string? severity, string? eventType, int? serverId, int? databaseId, int? page, int? pageSize, OperationsStore store, CancellationToken token) => Results.Ok(await store.ListAsync(fromUtc, toUtc, status, severity, eventType, serverId, databaseId, Math.Max(1, page ?? 1), Math.Clamp(pageSize ?? 50, 1, 100), token)));
+app.MapGet("/api/operations/events", async (DateTimeOffset? fromUtc, DateTimeOffset? toUtc, string? status, string? severity, string? eventType, int? serverId, int? databaseId, int? page, int? pageSize, OperationsStore store, CancellationToken token) =>
+    Results.Ok(await store.ListAsync(fromUtc, toUtc, status, severity, eventType, serverId, databaseId, Math.Max(1, page ?? 1), Math.Clamp(pageSize ?? 50, 1, 100), token)));
 app.MapGet("/api/operations/events/{id:long}", async (long id, OperationsStore store, CancellationToken token) => { var value = await store.DetailAsync(id, token); return value is null ? Results.NotFound() : Results.Ok(value); });
 app.MapGet("/api/protection/overview", async (int? serverId, ProtectionStore store, CancellationToken token) => Results.Ok(await store.OverviewAsync(serverId, token)));
-app.MapGet("/api/protection/backups", async (string? status, int? serverId, int? databaseId, string? recoveryModel, int? page, int? pageSize, ProtectionStore store, CancellationToken token) => Results.Ok(await store.BackupsAsync(status, serverId, databaseId, recoveryModel, Math.Max(1,page??1), Math.Clamp(pageSize??50,1,100), token)));
-app.MapGet("/api/protection/backups/{databaseId:int}", async (int databaseId, ProtectionStore store, CancellationToken token) => Results.Ok(await store.BackupsAsync(null,null,databaseId,null,1,1,token)));
-app.MapGet("/api/availability/alwayson", async (string? health, int? serverId, string? role, string? synchronizationState, int? page, int? pageSize, ProtectionStore store, CancellationToken token) => Results.Ok(await store.AlwaysOnAsync(health,serverId,role,synchronizationState,Math.Max(1,page??1),Math.Clamp(pageSize??50,1,100),token)));
-app.MapGet("/api/availability/alwayson/{id:long}", async (long id, ProtectionStore store, CancellationToken token) => Results.Ok(await store.AlwaysOnAsync(null,null,null,null,1,1,token,id)));
-app.MapGet("/api/jobs", async (string? status, int? serverId, bool? enabled, bool? repeatedFailure, bool? running, int? page, int? pageSize, ProtectionStore store, CancellationToken token) => Results.Ok(await store.JobsAsync(status,serverId,enabled,repeatedFailure,running,Math.Max(1,page??1),Math.Clamp(pageSize??50,1,100),token)));
-app.MapGet("/api/jobs/{id:long}", async (long id, ProtectionStore store, CancellationToken token) => Results.Ok(await store.JobsAsync(null,null,null,null,null,1,1,token,id)));
+app.MapGet("/api/protection/backups", async (string? status, int? serverId, int? databaseId, string? recoveryModel, int? page, int? pageSize, ProtectionStore store, CancellationToken token) => Results.Ok(await store.BackupsAsync(status, serverId, databaseId, recoveryModel, Math.Max(1, page ?? 1), Math.Clamp(pageSize ?? 50, 1, 100), token)));
+app.MapGet("/api/protection/backups/{databaseId:int}", async (int databaseId, ProtectionStore store, CancellationToken token) => Results.Ok(await store.BackupsAsync(null, null, databaseId, null, 1, 1, token)));
+app.MapGet("/api/availability/alwayson", async (string? health, int? serverId, string? role, string? synchronizationState, int? page, int? pageSize, ProtectionStore store, CancellationToken token) => Results.Ok(await store.AlwaysOnAsync(health, serverId, role, synchronizationState, Math.Max(1, page ?? 1), Math.Clamp(pageSize ?? 50, 1, 100), token)));
+app.MapGet("/api/availability/alwayson/{id:long}", async (long id, ProtectionStore store, CancellationToken token) => Results.Ok(await store.AlwaysOnAsync(null, null, null, null, 1, 1, token, id)));
+app.MapGet("/api/jobs", async (string? status, int? serverId, bool? enabled, bool? repeatedFailure, bool? running, int? page, int? pageSize, ProtectionStore store, CancellationToken token) => Results.Ok(await store.JobsAsync(status, serverId, enabled, repeatedFailure, running, Math.Max(1, page ?? 1), Math.Clamp(pageSize ?? 50, 1, 100), token)));
+app.MapGet("/api/jobs/{id:long}", async (long id, ProtectionStore store, CancellationToken token) => Results.Ok(await store.JobsAsync(null, null, null, null, null, 1, 1, token, id)));
 app.MapGet("/api/capacity/overview", async (CapacityStore store, CancellationToken token) => Results.Ok(await store.OverviewAsync(token)));
-app.MapGet("/api/capacity/databases", async (string? status, int? serverId, string? forecastStatus, int? page, int? pageSize, CapacityStore store, CancellationToken token) => Results.Ok(await store.DatabasesAsync(status,serverId,forecastStatus,Math.Max(1,page??1),Math.Clamp(pageSize??50,1,100),token)));
-app.MapGet("/api/capacity/databases/{id:int}", async (int id, CapacityStore store, CancellationToken token) => Results.Ok(await store.DatabasesAsync(null,null,null,1,1,token,id)));
-app.MapGet("/api/capacity/databases/{id:int}/history", async (int id, int? days, CapacityStore store, CancellationToken token) => Results.Ok(await store.HistoryAsync(id,days??30,token)));
-app.MapGet("/api/capacity/volumes", async (string? status, int? serverId, string? forecastStatus, int? page, int? pageSize, CapacityStore store, CancellationToken token) => Results.Ok(await store.VolumesAsync(status,serverId,forecastStatus,Math.Max(1,page??1),Math.Clamp(pageSize??50,1,100),token)));
-app.MapGet("/api/capacity/volumes/{id}", async (string id, CapacityStore store, CancellationToken token) => Results.Ok(await store.VolumesAsync(null,null,null,1,1,token,id)));
+app.MapGet("/api/capacity/databases", async (string? status, int? serverId, string? forecastStatus, int? page, int? pageSize, CapacityStore store, CancellationToken token) => Results.Ok(await store.DatabasesAsync(status, serverId, forecastStatus, Math.Max(1, page ?? 1), Math.Clamp(pageSize ?? 50, 1, 100), token)));
+app.MapGet("/api/capacity/databases/{id:int}", async (int id, CapacityStore store, CancellationToken token) => Results.Ok(await store.DatabasesAsync(null, null, null, 1, 1, token, id)));
+app.MapGet("/api/capacity/databases/{id:int}/history", async (int id, int? days, CapacityStore store, CancellationToken token) => Results.Ok(await store.HistoryAsync(id, days ?? 30, token)));
+app.MapGet("/api/capacity/volumes", async (string? status, int? serverId, string? forecastStatus, int? page, int? pageSize, CapacityStore store, CancellationToken token) => Results.Ok(await store.VolumesAsync(status, serverId, forecastStatus, Math.Max(1, page ?? 1), Math.Clamp(pageSize ?? 50, 1, 100), token)));
+app.MapGet("/api/capacity/volumes/{id}", async (string id, CapacityStore store, CancellationToken token) => Results.Ok(await store.VolumesAsync(null, null, null, 1, 1, token, id)));
 app.MapGet("/api/management/overview", async (ManagementReadStore store, CancellationToken token) => Results.Ok(await store.OverviewAsync(token)));
-app.MapGet("/api/management/attention", async (string? severity, int? serverId, int? databaseId, string? domain, int? page, int? pageSize, ManagementReadStore store, CancellationToken token) => Results.Ok(await store.AttentionAsync(severity,serverId,databaseId,domain,Math.Max(1,page??1),Math.Clamp(pageSize??50,1,100),token)));
-app.MapGet("/api/management/health", async (int? serverId, int? databaseId, ManagementReadStore store, CancellationToken token) => Results.Ok(await store.HealthAsync(serverId,databaseId,token)));
-app.MapGet("/api/management/changes", (DateTimeOffset? fromUtc, DateTimeOffset? toUtc) => Results.Ok(new PagedResult<ManagementChangeRow>(Array.Empty<ManagementChangeRow>(),1,50,0)));
+app.MapGet("/api/management/attention", async (string? severity, int? serverId, int? databaseId, string? domain, int? page, int? pageSize, ManagementReadStore store, CancellationToken token) => Results.Ok(await store.AttentionAsync(severity, serverId, databaseId, domain, Math.Max(1, page ?? 1), Math.Clamp(pageSize ?? 50, 1, 100), token)));
+app.MapGet("/api/management/health", async (int? serverId, int? databaseId, ManagementReadStore store, CancellationToken token) => Results.Ok(await store.HealthAsync(serverId, databaseId, token)));
+app.MapGet("/api/management/changes", (DateTimeOffset? fromUtc, DateTimeOffset? toUtc) => Results.Ok(new PagedResult<ManagementChangeRow>(Array.Empty<ManagementChangeRow>(), 1, 50, 0)));
 app.MapGet("/api/management/correlations", () => Results.Ok(Array.Empty<CorrelationGroupRow>()));
 app.MapGet("/api/management/correlations/{id:long}", (long id) => Results.NotFound());
 app.MapGet("/api/anomalies/overview", async (BaselineStore store, CancellationToken token) => Results.Ok(await store.OverviewAsync(token)));
