@@ -126,12 +126,12 @@ function ObjectExplorer({ servers, onServerSelect, onObjectSelect }: { servers: 
     void loadDatabases(serverId);
   };
 
-  const loadObjects = async (serverId: number, databaseName: string) => {
-    const key = `${serverId}:${databaseName}`;
+  const loadObjects = async (serverId: number, database: SidebarDatabase) => {
+    const key = `${serverId}:${database.databaseName}`;
     if (objects[key] || loadingDatabases.has(key)) return;
     setLoadingDatabases(current => new Set(current).add(key));
     try {
-      const query = new URLSearchParams({ serverId: String(serverId), databaseName });
+      const query = new URLSearchParams({ serverId: String(serverId), databaseId: String(database.databaseId) });
       const response = await fetch(`${base}/live/object-explorer?${query}`);
       if (!response.ok) throw new Error(`API request failed (${response.status})`);
       const snapshot = await response.json() as ObjectExplorerSnapshot;
@@ -144,9 +144,11 @@ function ObjectExplorer({ servers, onServerSelect, onObjectSelect }: { servers: 
   };
 
   const toggleDatabase = (serverId: number, databaseName: string) => {
+    const database = databases[serverId]?.find(row => row.databaseName === databaseName);
+    if (!database) return;
     const key = `${serverId}:${databaseName}`;
     setExpandedDatabases(current => { const next = new Set(current); if (next.has(key)) next.delete(key); else next.add(key); return next; });
-    void loadObjects(serverId, databaseName);
+    void loadObjects(serverId, database);
   };
 
   const folder = (label: string, icon: ReactNode, items: ObjectExplorerItem[], objectType: string, serverId: number, databaseName: string) => <List component="div" disablePadding sx={{ pl: 2.5 }}>{<ListItemButton dense sx={{ minHeight: 28, py: 0 }}><ListItemIcon sx={{ minWidth: 28 }}>{icon}</ListItemIcon><ListItemText primary={`${label} (${items.length})`} primaryTypographyProps={{ variant: 'caption', noWrap: true }} /></ListItemButton>}{items.map(item => <ListItemButton key={`${item.schemaName}.${item.objectName}`} dense sx={{ minHeight: 26, py: 0, pl: 4.5 }} onClick={() => onObjectSelect({ serverId, databaseName, schemaName: item.schemaName, objectName: item.objectName, objectType })}><ListItemText primary={`${item.schemaName}.${item.objectName}`} primaryTypographyProps={{ variant: 'caption', noWrap: true, title: `${item.schemaName}.${item.objectName}` }} /></ListItemButton>)}</List>;

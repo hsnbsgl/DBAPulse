@@ -181,14 +181,13 @@ public sealed class LiveOperationsStore
         return new(applications.Sum(row => row.ConnectionCount), applications.Count, applications);
     }
 
-    public async Task<ObjectExplorerSnapshot> GetObjectExplorerAsync(int serverId, string databaseName, CancellationToken token)
+    public async Task<ObjectExplorerSnapshot> GetObjectExplorerAsync(int serverId, int? databaseId, string? databaseName, CancellationToken token)
     {
-        if (string.IsNullOrWhiteSpace(databaseName) || databaseName.Length > 128)
-            throw new ArgumentException("A valid database name is required.", nameof(databaseName));
-
         var sourceConnection = await ResolveSourceConnectionAsync(serverId, token);
         if (sourceConnection is null)
             throw new InvalidOperationException($"No live source connection is configured for server {serverId}.");
+
+        databaseName = await ResolveDatabaseNameAsync(sourceConnection, databaseId, databaseName, token);
 
         const string sql = """
             SELECT
@@ -232,6 +231,24 @@ public sealed class LiveOperationsStore
             procedures.OrderBy(item => (item.SchemaName, item.ObjectName), StringTupleComparer.Instance).ToList(),
             views.OrderBy(item => (item.SchemaName, item.ObjectName), StringTupleComparer.Instance).ToList(),
             functions.OrderBy(item => (item.SchemaName, item.ObjectName), StringTupleComparer.Instance).ToList());
+    }
+
+    private static async Task<string> ResolveDatabaseNameAsync(string sourceConnection, int? databaseId, string? databaseName, CancellationToken token)
+    {
+        if (databaseId is not null)
+        {
+            var masterConnection = new SqlConnectionStringBuilder(sourceConnection) { InitialCatalog = "master" }.ConnectionString;
+            await using var master = new SqlConnection(masterConnection);
+            await master.OpenAsync(token);
+            await using var command = new SqlCommand("SELECT name FROM sys.databases WHERE database_id = @DatabaseId;", master);
+            command.Parameters.AddWithValue("@DatabaseId", databaseId.Value);
+            var resolved = Convert.ToString(await command.ExecuteScalarAsync(token));
+            if (!string.IsNullOrWhiteSpace(resolved)) return resolved;
+        }
+
+        if (string.IsNullOrWhiteSpace(databaseName) || databaseName.Length > 128)
+            throw new ArgumentException("A valid database name or database id is required.", nameof(databaseName));
+        return databaseName;
     }
 
     public async Task<ObjectDefinition?> GetObjectDefinitionAsync(int serverId, string databaseName, string schemaName, string objectName, string objectType, CancellationToken token)

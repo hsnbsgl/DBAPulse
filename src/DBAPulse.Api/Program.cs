@@ -138,7 +138,7 @@ app.MapGet("/api/performance/waits", async (int? hours, PerformanceStore store, 
 app.MapGet("/api/live/requests", async (int serverId, LiveOperationsStore store, CancellationToken token) => Results.Ok(await store.GetRequestsAsync(serverId, token)));
 app.MapGet("/api/live/who-is-active", async (int serverId, LiveOperationsStore store, CancellationToken token) => Results.Ok(await store.GetWhoIsActiveAsync(serverId, token)));
 app.MapGet("/api/live/connections", async (int serverId, LiveOperationsStore store, CancellationToken token) => Results.Ok(await store.GetConnectionsAsync(serverId, token)));
-app.MapGet("/api/live/object-explorer", async (int serverId, string databaseName, LiveOperationsStore store, CancellationToken token) => Results.Ok(await store.GetObjectExplorerAsync(serverId, databaseName, token)));
+app.MapGet("/api/live/object-explorer", async (int serverId, int? databaseId, string? databaseName, LiveOperationsStore store, CancellationToken token) => Results.Ok(await store.GetObjectExplorerAsync(serverId, databaseId, databaseName, token)));
 app.MapGet("/api/live/object-definition", async (int serverId, string databaseName, string schemaName, string objectName, string objectType, LiveOperationsStore store, CancellationToken token) =>
 {
     var definition = await store.GetObjectDefinitionAsync(serverId, databaseName, schemaName, objectName, objectType, token);
