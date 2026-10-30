@@ -24,6 +24,7 @@ builder.Services.AddSingleton(new CapacityStore(apiConnection));
 builder.Services.AddSingleton(new BaselineStore(apiConnection));
 builder.Services.AddSingleton(new ManagementReadStore(apiConnection));
 builder.Services.AddSingleton(new LiveOperationsStore(apiConnection, sourceConnection, liveSourceConnections));
+builder.Services.AddSingleton<ContainerMonitorService>();
 builder.Services.AddSingleton<AiSettingsStore>();
 builder.Services.AddSingleton<SettingsPersistence>();
 builder.Services.AddSingleton<SmtpSettingsStore>();
@@ -122,6 +123,8 @@ app.MapGet("/api/settings/retention", async (RetentionSettingsService service, C
 app.MapPut("/api/settings/retention", async (RetentionSettingsUpdate update, RetentionSettingsService service, CancellationToken token) => Results.Ok(await service.UpdateAsync(update, token)));
 app.MapGet("/api/settings/backup-scope", async (int? serverId, ServerSettingsService service, CancellationToken token) => Results.Ok(await service.ListBackupScopeAsync(serverId, token)));
 app.MapPut("/api/settings/backup-scope/{databaseId:int}", async (int databaseId, BackupScopeUpdate update, ServerSettingsService service, CancellationToken token) => Results.Ok(new { success = await service.UpdateBackupScopeAsync(databaseId, update, token) }));
+app.MapGet("/api/settings/containers", async (ContainerMonitorService service, CancellationToken token) => Results.Ok(await service.ListAsync(token)));
+app.MapGet("/api/settings/containers/{containerId}/logs", async (string containerId, int? tail, ContainerMonitorService service, CancellationToken token) => Results.Ok(new { logs = await service.LogsAsync(containerId, tail ?? 200, token) }));
 app.MapGet("/api/databases", async (int? page, int? pageSize, string? search, DashboardStore store, CancellationToken token) => Results.Ok(await store.GetDatabasesAsync(Math.Max(1, page ?? 1), Math.Clamp(pageSize ?? 50, 1, 100), search, token)));
 app.MapGet("/api/databases/{id:int}", async (int id, DashboardStore store, CancellationToken token) => { var value = await store.GetDatabaseDetailAsync(id, token); return value is null ? Results.NotFound() : Results.Ok(value); });
 app.MapGet("/api/databases/{id:int}/capacity-history", async (int id, int? days, DashboardStore store, CancellationToken token) => Results.Ok(await store.GetCapacityHistoryAsync(id, days ?? 30, token)));

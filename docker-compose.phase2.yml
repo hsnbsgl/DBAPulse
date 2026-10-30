@@ -69,6 +69,7 @@ services:
     volumes:
       - ./.secrets/dbapulse-admin-password:/run/secrets/dbapulse-admin-password:ro,Z
       - ./.runtime/settings:/app/data:Z
+      - /var/run/docker.sock:/var/run/docker.sock:ro
   dbapulse-web:
     build:
       context: ./src/DBAPulse.Web
