@@ -22,6 +22,7 @@ vi.mock('../common/Ui', () => ({
   EmptyState: ({ title }: { title: string }) => <div>{title}</div>,
   KpiCard: () => <div />,
   StatusChip: ({ value }: { value: string }) => <span>{value}</span>,
+  ClickableRow: ({ children, onClick }: { children?: ReactNode; onClick: () => void }) => <div onClick={onClick}>{children}</div>,
 }));
 vi.mock('../charts/DonutChart', () => ({ default: () => <div data-testid="donut-chart" /> }));
 vi.mock('../charts/HorizontalBarChart', () => ({ default: () => <div data-testid="bar-chart" /> }));

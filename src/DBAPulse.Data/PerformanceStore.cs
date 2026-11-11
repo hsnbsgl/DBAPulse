@@ -23,10 +23,21 @@ public sealed class PerformanceStore
 
     private async Task<SqlDataReader> ExecuteAsync(string procedure, int hours, CancellationToken token)
     {
-        var connection = new SqlConnection(_connectionString); await connection.OpenAsync(token);
-        var command = new SqlCommand(procedure, connection) { CommandType = CommandType.StoredProcedure, CommandTimeout = 60 };
-        command.Parameters.AddWithValue("@Hours", AllowedHours(hours));
-        return await command.ExecuteReaderAsync(CommandBehavior.CloseConnection, token);
+        var connection = new SqlConnection(_connectionString);
+        SqlCommand? command = null;
+        try
+        {
+            await connection.OpenAsync(token);
+            command = new SqlCommand(procedure, connection) { CommandType = CommandType.StoredProcedure, CommandTimeout = 60 };
+            command.Parameters.AddWithValue("@Hours", AllowedHours(hours));
+            return await command.ExecuteReaderAsync(CommandBehavior.CloseConnection, token);
+        }
+        catch
+        {
+            if (command is not null) await command.DisposeAsync();
+            await connection.DisposeAsync();
+            throw;
+        }
     }
     private async Task<IReadOnlyList<T>> ReadAsync<T>(string procedure, int hours, Func<SqlDataReader, T> mapper, CancellationToken token)
     {

@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { CssBaseline } from '@mui/material';
 import { createTheme, ThemeProvider } from '@mui/material/styles';
 import App from './App';
+import ErrorBoundary from './components/common/ErrorBoundary';
 import './theme.css';
 
 type ThemeMode = 'dark' | 'light';
@@ -38,7 +39,7 @@ function Root() {
     return next;
   });
   document.documentElement.dataset.theme = mode;
-  return <ThemeProvider theme={theme}><CssBaseline /><App themeMode={mode} onToggleTheme={toggleTheme} /></ThemeProvider>;
+  return <ThemeProvider theme={theme}><CssBaseline /><ErrorBoundary><App themeMode={mode} onToggleTheme={toggleTheme} /></ErrorBoundary></ThemeProvider>;
 }
 
 createRoot(document.getElementById('root')!).render(<React.StrictMode><Root /></React.StrictMode>);

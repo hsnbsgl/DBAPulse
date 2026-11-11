@@ -1,18 +1,14 @@
 import { useEffect, useMemo, useRef, useState, type RefObject, type SyntheticEvent } from 'react';
 import { Alert, Box, Button, Chip, Divider, LinearProgress, Paper, Stack, Tab, Table, TableBody, TableCell, TableHead, TableRow, TableSortLabel, Tabs, Typography } from '@mui/material';
-import { KpiCard, EmptyState, StatusChip } from '../common/Ui';
+import { KpiCard, EmptyState, StatusChip, ClickableRow } from '../common/Ui';
 import ListToolbar, { ALL_RECORDS, useListRefresh } from '../common/ListToolbar';
 import DonutChart from '../charts/DonutChart';
 import HorizontalBarChart from '../charts/HorizontalBarChart';
 import { chartColors } from '../charts/chartTheme';
 import { formatDateTime } from '../common/date';
+import { apiFetch, getJson as get } from '../../api/client';
+import { createSseParser } from '../../api/sse';
 
-const api = import.meta.env.VITE_API_BASE_URL || '/api';
-const get = async <T,>(path: string): Promise<T> => {
-  const response = await fetch(`${api}${path}`);
-  if (!response.ok) throw new Error(`API request failed (${response.status})`);
-  return response.json();
-};
 const date = formatDateTime;
 const mb = (value?: number | null) => value == null ? 'N/A' : `${value.toLocaleString('en-US', { maximumFractionDigits: 1 })} MB`;
 const bytes = (value?: number | null) => {
@@ -293,31 +289,40 @@ function AiSummaryContent({ text, streaming }: { text: string; streaming: boolea
   })}{streaming && <Typography component="span" className="ai-summary-cursor">▌</Typography>}</Box>;
 }
 
+// Completed AI summaries are cached per server for the browser session so revisiting the tab does not re-run the LLM.
+const aiSummaryCache = new Map<number, string>();
+
 function AiSummaryTab({ serverId }: { serverId: number }) {
-  const [loading, setLoading] = useState(true); const [summary, setSummary] = useState(''); const [error, setError] = useState('');
+  const cached = aiSummaryCache.get(serverId);
+  const [loading, setLoading] = useState(cached == null); const [summary, setSummary] = useState(cached ?? ''); const [error, setError] = useState('');
+  const [generation, setGeneration] = useState(0);
   useEffect(() => {
+    const fromCache = aiSummaryCache.get(serverId);
+    if (fromCache != null) { setSummary(fromCache); setError(''); setLoading(false); return; }
     const controller = new AbortController(); let cancelled = false;
     const readStream = async () => {
       setLoading(true); setSummary(''); setError('');
+      let text = ''; let failed = false;
       try {
-        const response = await fetch(`${api}/servers/${serverId}/ai-summary/stream`, { method: 'POST', signal: controller.signal });
+        const response = await apiFetch(`/servers/${serverId}/ai-summary/stream`, { method: 'POST', signal: controller.signal });
         if (!response.ok || !response.body) throw new Error('AI provider could not be reached.');
-        const reader = response.body.getReader(); const decoder = new TextDecoder(); let buffer = '';
-        const consume = (block: string) => {
-          let event = 'message'; let data = '';
-          block.split(/\r?\n/).forEach(line => { if (line.startsWith('event:')) event = line.slice(6).trim(); else if (line.startsWith('data:')) data += line.slice(5).trim(); });
-          if (!data || cancelled) return; let value = ''; try { value = JSON.parse(data); } catch { value = data; }
-          if (event === 'token') setSummary(current => current + value); else if (event === 'error') setError(value || 'AI provider could not be reached.');
-        };
-        while (true) { const result = await reader.read(); if (result.done) break; buffer += decoder.decode(result.value, { stream: true }); const blocks = buffer.split(/\r?\n\r?\n/); buffer = blocks.pop() || ''; blocks.forEach(consume); }
-        if (buffer) consume(buffer);
+        const reader = response.body.getReader(); const decoder = new TextDecoder();
+        const parser = createSseParser(({ event, data }) => {
+          if (cancelled) return; let value = ''; try { value = JSON.parse(data); } catch { value = data; }
+          if (event === 'token') { text += value; setSummary(current => current + value); } else if (event === 'error') { failed = true; setError(value || 'AI provider could not be reached.'); }
+        });
+        while (true) { const result = await reader.read(); if (result.done) break; parser.push(decoder.decode(result.value, { stream: true })); }
+        parser.push(decoder.decode()); parser.flush();
+        if (!cancelled && !failed && text) aiSummaryCache.set(serverId, text);
       } catch (exception) { if (!cancelled && (exception as Error).name !== 'AbortError') setError((exception as Error).message || 'AI provider could not be reached.'); }
       finally { if (!cancelled) setLoading(false); }
     };
     void readStream(); return () => { cancelled = true; controller.abort(); };
-  }, [serverId]);
-  return <Paper className="panel ai-summary-panel"><Stack spacing={1.5}><Typography variant="h6">AI Summary</Typography><Typography variant="body2" color="text.secondary">Generated from the latest collected server and health data.</Typography>{error ? <Alert severity="info">{error} <a href="?view=settings">Open Settings</a></Alert> : summary ? <AiSummaryContent text={summary} streaming={loading} /> : <Typography color="text.secondary">Generating summary…</Typography>}</Stack></Paper>;
-}function DatabasesTab({ data, onDatabase }: { data: WorkspaceData; onDatabase: (id: number) => void }) {
+  }, [serverId, generation]);
+  const regenerate = () => { aiSummaryCache.delete(serverId); setGeneration(value => value + 1); };
+  return <Paper className="panel ai-summary-panel"><Stack spacing={1.5}><Stack direction="row" justifyContent="space-between" alignItems="flex-start" spacing={1}><Box><Typography variant="h6">AI Summary</Typography><Typography variant="body2" color="text.secondary">Generated from the latest collected server and health data.</Typography></Box><Button size="small" variant="outlined" onClick={regenerate} disabled={loading}>{loading ? 'Generating…' : 'Regenerate'}</Button></Stack>{error ? <Alert severity="info">{error} <a href="?view=settings">Open Settings</a></Alert> : summary ? <AiSummaryContent text={summary} streaming={loading} /> : <Typography color="text.secondary">Generating summary…</Typography>}</Stack></Paper>;
+}
+function DatabasesTab({ data, onDatabase }: { data: WorkspaceData; onDatabase: (id: number) => void }) {
   const capacityByDatabase = useMemo(() => new Map(data.capacity.items.map(x => [x.databaseId, x])), [data.capacity.items]);
   const chartRows = data.capacity.items.filter(x => Number.isFinite(x.currentTotalSizeMb)).sort((left, right) => right.currentTotalSizeMb - left.currentTotalSizeMb);
   const [sort, setSort] = useState<SortState>({ key: 'databaseName', direction: 'asc' });
@@ -332,7 +337,7 @@ function AiSummaryTab({ serverId }: { serverId: number }) {
   useEffect(() => setChartPage(1), [data.capacity.items]);
   const chartPageRows = chartRows.slice((chartPage - 1) * chartPageSize, chartPage * chartPageSize);
   return <Stack spacing={2}><Paper className="panel"><Typography variant="h6">Database Size by Database</Typography><Divider sx={{ my: 1.5 }} />{chartRows.length ? <><Box sx={{ width: '100%', mr: 'auto' }}><HorizontalBarChart labels={chartPageRows.map(x => x.databaseName)} values={chartPageRows.map(x => x.currentTotalSizeMb)} valueName="Size (MB)" color={chartColors.actual} height={Math.max(240, Math.min(480, chartPageRows.length * 36 + 80))} /></Box><ChartPager page={chartPage} total={chartRows.length} onChange={setChartPage} /></> : <EmptyState title="No capacity chart data" description="Database size telemetry is not available for this server." />}</Paper><Paper className="panel"><Typography variant="h6">Databases ({data.server.databases.length})</Typography><ListToolbar filename="server-databases" rows={rows} showPageSize={false} /><Divider sx={{ my: 1.5 }} />
-    {data.server.databases.length ? <Table size="small"><TableHead><TableRow><SortHeader label="Database" sortKey="databaseName" sort={sort} onSort={onSort} /><SortHeader label="Status" sortKey="databaseStatus" sort={sort} onSort={onSort} /><SortHeader label="Recovery" sortKey="recoveryModel" sort={sort} onSort={onSort} /><SortHeader label="Current Size" sortKey="currentTotalSizeMb" sort={sort} onSort={onSort} /><SortHeader label="Growth 30d" sortKey="growth30dMb" sort={sort} onSort={onSort} /><SortHeader label="Last Seen" sortKey="lastSeenAtUtc" sort={sort} onSort={onSort} /></TableRow></TableHead><TableBody>{rows.map(db => { const capacity = capacityByDatabase.get(db.databaseId); return <TableRow hover className="clickable" key={db.databaseId} onClick={() => onDatabase(db.databaseId)}><TableCell>{db.databaseName}</TableCell><TableCell><StatusChip value={db.databaseStatus} /></TableCell><TableCell>{db.recoveryModel}</TableCell><TableCell>{mb(capacity?.currentTotalSizeMb)}</TableCell><TableCell>{capacity?.growth30dMb == null ? 'N/A' : `${capacity.growth30dMb.toLocaleString()} MB`}</TableCell><TableCell>{date(db.lastSeenAtUtc)}</TableCell></TableRow>; })}</TableBody></Table> : <EmptyState title="No databases found" description="No database telemetry is associated with this server." />}
+    {data.server.databases.length ? <Table size="small"><TableHead><TableRow><SortHeader label="Database" sortKey="databaseName" sort={sort} onSort={onSort} /><SortHeader label="Status" sortKey="databaseStatus" sort={sort} onSort={onSort} /><SortHeader label="Recovery" sortKey="recoveryModel" sort={sort} onSort={onSort} /><SortHeader label="Current Size" sortKey="currentTotalSizeMb" sort={sort} onSort={onSort} /><SortHeader label="Growth 30d" sortKey="growth30dMb" sort={sort} onSort={onSort} /><SortHeader label="Last Seen" sortKey="lastSeenAtUtc" sort={sort} onSort={onSort} /></TableRow></TableHead><TableBody>{rows.map(db => { const capacity = capacityByDatabase.get(db.databaseId); return <ClickableRow key={db.databaseId} onClick={() => onDatabase(db.databaseId)}><TableCell>{db.databaseName}</TableCell><TableCell><StatusChip value={db.databaseStatus} /></TableCell><TableCell>{db.recoveryModel}</TableCell><TableCell>{mb(capacity?.currentTotalSizeMb)}</TableCell><TableCell>{capacity?.growth30dMb == null ? 'N/A' : `${capacity.growth30dMb.toLocaleString()} MB`}</TableCell><TableCell>{date(db.lastSeenAtUtc)}</TableCell></ClickableRow>; })}</TableBody></Table> : <EmptyState title="No databases found" description="No database telemetry is associated with this server." />}
   </Paper></Stack>;
 }
 
@@ -342,28 +347,32 @@ function LiveOperationsPanel({ serverId }: { serverId: number }) {
   const [error, setError] = useState('');
   const [updatedAt, setUpdatedAt] = useState<Date>();
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const requestRef = useRef<AbortController>();
   const load = async () => {
+    if (requestRef.current) return; // skip while a previous poll is still in flight
+    const controller = new AbortController();
+    requestRef.current = controller;
     setIsRefreshing(true);
     try {
       const [requestRows, whoIsActive] = await Promise.all([
-        get<LiveRequest[]>(`/live/requests?serverId=${serverId}`),
-        get<WhoIsActiveRow[]>(`/live/who-is-active?serverId=${serverId}`),
+        get<LiveRequest[]>(`/live/requests?serverId=${serverId}`, { signal: controller.signal }),
+        get<WhoIsActiveRow[]>(`/live/who-is-active?serverId=${serverId}`, { signal: controller.signal }),
       ]);
+      if (controller.signal.aborted) return;
       setRows(requestRows);
       setWhoIsActiveRows(whoIsActive);
       setError('');
       setUpdatedAt(new Date());
     } catch (exception) {
-      setError(exception instanceof Error ? exception.message : String(exception));
+      if (!controller.signal.aborted) setError(exception instanceof Error ? exception.message : String(exception));
     } finally {
-      setIsRefreshing(false);
+      if (requestRef.current === controller) { requestRef.current = undefined; setIsRefreshing(false); }
     }
   };
   useEffect(() => {
-    let cancelled = false;
     void load();
-    const timer = window.setInterval(() => { if (!cancelled) void load(); }, 15_000);
-    return () => { cancelled = true; window.clearInterval(timer); };
+    const timer = window.setInterval(() => { if (!document.hidden) void load(); }, 15_000);
+    return () => { window.clearInterval(timer); requestRef.current?.abort(); requestRef.current = undefined; };
   }, [serverId]);
   const whoIsActiveColumns = Array.from(new Set(whoIsActiveRows.flatMap(row => Object.keys(row))));
   const cellValue = (value: unknown) => value == null ? '—' : typeof value === 'object' ? JSON.stringify(value) : String(value);

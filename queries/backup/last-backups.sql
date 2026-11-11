@@ -1,4 +1,10 @@
-/* Read-only: most recent backup recorded for each database. */
+/* Read-only: most recent backup recorded for each database.
+   msdb dates are source-local; backup_finish_date_utc converts them with the source's current UTC offset.
+   Only LOG rows are bounded to the last 35 days (they dominate msdb row counts); FULL/DIFFERENTIAL rows are
+   not bounded so a database whose last full backup is older than 35 days still reports its real last backup. */
+DECLARE @utc_offset_minutes int = DATEPART(TZOFFSET, SYSDATETIMEOFFSET());
+DECLARE @log_lower_bound datetime = DATEADD(DAY, -35, GETDATE());
+
 WITH latest_backup AS
 (
     SELECT
@@ -16,15 +22,19 @@ WITH latest_backup AS
             ORDER BY bs.backup_finish_date DESC
         ) AS row_number
     FROM msdb.dbo.backupset AS bs
+    WHERE bs.server_name = @@SERVERNAME
+      AND (bs.type <> 'L' OR bs.backup_finish_date >= @log_lower_bound)
 )
 SELECT
     database_name,
     CASE type WHEN 'D' THEN 'FULL' WHEN 'I' THEN 'DIFFERENTIAL' WHEN 'L' THEN 'LOG' ELSE type END AS backup_type,
     backup_start_date,
     backup_finish_date,
+    DATEADD(MINUTE, -@utc_offset_minutes, backup_finish_date) AS backup_finish_date_utc,
     CAST(backup_size / 1048576.0 AS decimal(19, 2)) AS backup_size_mb,
     CAST(compressed_backup_size / 1048576.0 AS decimal(19, 2)) AS compressed_backup_size_mb,
-    is_copy_only
+    is_copy_only,
+    duration_seconds
 FROM latest_backup
 WHERE row_number = 1
 ORDER BY database_name, backup_type;

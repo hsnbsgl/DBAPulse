@@ -31,3 +31,6 @@
 .sql-definition .sql-token-keyword{color:#72abff;font-weight:700}.sql-definition .sql-token-string{color:#d8a56d}.sql-definition .sql-token-number{color:#bd9cff}.sql-definition .sql-token-comment{color:#7f91a3;font-style:italic}:root[data-theme='light'] .sql-definition .sql-token-keyword{color:#1f638f}:root[data-theme='light'] .sql-definition .sql-token-string{color:#9a5d16}:root[data-theme='light'] .sql-definition .sql-token-number{color:#744bb3}:root[data-theme='light'] .sql-definition .sql-token-comment{color:#667784}
 /* Slightly denser typography scale. */
 html{font-size:15px}
+
+/* Keyboard focus for clickable table rows. */
+tr.clickable:focus-visible{outline:2px solid #f08a24;outline-offset:-2px}

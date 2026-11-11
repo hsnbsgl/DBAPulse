@@ -81,7 +81,10 @@ fi
 
 chmod --reference="$ENV_FILE" "$tmp_file" 2>/dev/null || chmod 600 "$tmp_file"
 mv "$tmp_file" "$ENV_FILE"
-trap - EXIT
+# Leave the EXIT trap in place: it removes $replacement_file, which holds secrets.
+
+# Keep only the five most recent .env backups; each one contains secrets.
+ls -1t "$ENV_FILE".bak.* 2>/dev/null | tail -n +6 | while IFS= read -r old_backup; do rm -f -- "$old_backup"; done
 
 echo "Server $server_id için live source bağlantısı kaydedildi."
 echo ".env yedeği: $backup_file"

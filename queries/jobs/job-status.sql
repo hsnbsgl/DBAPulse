@@ -1,4 +1,5 @@
-/* Read-only: SQL Agent job health. Source-local dates are retained as source values. */
+/* Read-only: SQL Agent job health. Source-local dates are retained as source values.
+   Failure windows use run end = run_date + run_time + run_duration (same as msdb.dbo.agent_datetime, inlined to avoid needing EXECUTE on that function). */
 WITH latest_run AS
 (
     SELECT
@@ -43,8 +44,8 @@ SELECT
     a.start_execution_date AS current_start_at_source,
     CASE WHEN a.start_execution_date IS NULL OR a.stop_execution_date IS NOT NULL THEN NULL ELSE DATEDIFF(SECOND,a.start_execution_date,GETDATE()) END AS current_duration_seconds,
     a.next_scheduled_run_date AS next_run_at_source,
-    (SELECT COUNT(*) FROM history h24 WHERE h24.job_id=j.job_id AND h24.run_status=0 AND DATEADD(SECOND,(h24.run_duration/10000)*3600+((h24.run_duration/100)%100)*60+(h24.run_duration%100), CONVERT(datetime,CONVERT(char(8),h24.run_date),112)) >= DATEADD(DAY,-1,GETDATE())) AS failure_count_24h,
-    (SELECT COUNT(*) FROM history h7 WHERE h7.job_id=j.job_id AND h7.run_status=0 AND DATEADD(SECOND,(h7.run_duration/10000)*3600+((h7.run_duration/100)%100)*60+(h7.run_duration%100), CONVERT(datetime,CONVERT(char(8),h7.run_date),112)) >= DATEADD(DAY,-7,GETDATE())) AS failure_count_7d,
+    (SELECT COUNT(*) FROM history h24 WHERE h24.job_id=j.job_id AND h24.run_status=0 AND DATEADD(SECOND,(h24.run_duration/10000)*3600+((h24.run_duration/100)%100)*60+(h24.run_duration%100), DATEADD(SECOND,(h24.run_time/10000)*3600+((h24.run_time/100)%100)*60+(h24.run_time%100), CONVERT(datetime,CONVERT(char(8),h24.run_date),112))) >= DATEADD(DAY,-1,GETDATE())) AS failure_count_24h,
+    (SELECT COUNT(*) FROM history h7 WHERE h7.job_id=j.job_id AND h7.run_status=0 AND DATEADD(SECOND,(h7.run_duration/10000)*3600+((h7.run_duration/100)%100)*60+(h7.run_duration%100), DATEADD(SECOND,(h7.run_time/10000)*3600+((h7.run_time/100)%100)*60+(h7.run_time%100), CONVERT(datetime,CONVERT(char(8),h7.run_date),112))) >= DATEADD(DAY,-7,GETDATE())) AS failure_count_7d,
     CAST(CASE WHEN (SELECT COUNT(*) FROM history hr WHERE hr.job_id=j.job_id AND hr.execution_number<=3 AND hr.run_status=0)>=2 THEN 1 ELSE 0 END AS bit) AS repeated_failure,
     (SELECT AVG((hs.run_duration/10000)*3600+((hs.run_duration/100)%100)*60+(hs.run_duration%100)) FROM history hs WHERE hs.job_id=j.job_id AND hs.run_status=1 AND hs.execution_number<=10) AS average_duration_seconds,
     (SELECT MAX((hm.run_duration/10000)*3600+((hm.run_duration/100)%100)*60+(hm.run_duration%100)) FROM history hm WHERE hm.job_id=j.job_id AND hm.run_status=1 AND hm.execution_number<=10) AS max_duration_seconds

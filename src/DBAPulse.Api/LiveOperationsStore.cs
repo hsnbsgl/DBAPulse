@@ -28,38 +28,33 @@ public sealed record ObjectDefinitionRequest(int ServerId, string DatabaseName, 
 
 public sealed class LiveOperationsStore
 {
-    private const string InstallWhoIsActiveSql = """
-        IF OBJECT_ID(N'dbo.sp_WhoIsActive', N'P') IS NULL
-        BEGIN
-            EXEC(N'
-        CREATE PROCEDURE dbo.sp_WhoIsActive
-        AS
-        BEGIN
-            SET NOCOUNT ON;
-            SELECT TOP (100)
-                s.session_id,
-                r.status,
-                DB_NAME(COALESCE(r.database_id, s.database_id)) AS database_name,
-                CONVERT(nvarchar(4000), st.text) AS sql_text,
-                r.wait_type,
-                r.wait_time,
-                NULLIF(r.blocking_session_id, 0) AS blocking_session_id,
-                s.login_name,
-                s.host_name,
-                s.program_name,
-                COALESCE(r.start_time, s.last_request_start_time) AS start_time,
-                SYSUTCDATETIME() AS collection_time,
-                COALESCE(r.cpu_time, 0) AS CPU,
-                COALESCE(r.reads, 0) AS reads,
-                COALESCE(r.writes, 0) AS writes,
-                s.open_transaction_count AS open_tran_count
-            FROM sys.dm_exec_sessions AS s
-            LEFT JOIN sys.dm_exec_requests AS r ON r.session_id = s.session_id
-            OUTER APPLY sys.dm_exec_sql_text(r.sql_handle) AS st
-            WHERE s.is_user_process = 1 AND s.session_id <> @@SPID
-            ORDER BY COALESCE(r.total_elapsed_time, 0) DESC, s.session_id;
-        END');
-        END;
+    // Executed as a read-only ad-hoc batch (same result shape as the former helper
+    // procedure) so nothing is ever created on the monitored server and a
+    // read-only monitoring login (VIEW SERVER STATE) is sufficient.
+    private const string WhoIsActiveSql = """
+        SET NOCOUNT ON;
+        SELECT TOP (100)
+            s.session_id,
+            r.status,
+            DB_NAME(COALESCE(r.database_id, s.database_id)) AS database_name,
+            CONVERT(nvarchar(4000), st.text) AS sql_text,
+            r.wait_type,
+            r.wait_time,
+            NULLIF(r.blocking_session_id, 0) AS blocking_session_id,
+            s.login_name,
+            s.host_name,
+            s.program_name,
+            COALESCE(r.start_time, s.last_request_start_time) AS start_time,
+            SYSUTCDATETIME() AS collection_time,
+            COALESCE(r.cpu_time, 0) AS CPU,
+            COALESCE(r.reads, 0) AS reads,
+            COALESCE(r.writes, 0) AS writes,
+            s.open_transaction_count AS open_tran_count
+        FROM sys.dm_exec_sessions AS s
+        LEFT JOIN sys.dm_exec_requests AS r ON r.session_id = s.session_id
+        OUTER APPLY sys.dm_exec_sql_text(r.sql_handle) AS st
+        WHERE s.is_user_process = 1 AND s.session_id <> @@SPID
+        ORDER BY COALESCE(r.total_elapsed_time, 0) DESC, s.session_id;
         """;
 
     private readonly string _connectionString;
@@ -138,9 +133,7 @@ public sealed class LiveOperationsStore
         var masterConnection = new SqlConnectionStringBuilder(sourceConnection) { InitialCatalog = "master" }.ConnectionString;
         await using var connection = new SqlConnection(masterConnection);
         await connection.OpenAsync(token);
-        await using (var installCommand = new SqlCommand(InstallWhoIsActiveSql, connection) { CommandTimeout = 10 })
-            await installCommand.ExecuteNonQueryAsync(token);
-        await using var command = new SqlCommand("EXEC master.dbo.sp_WhoIsActive;", connection) { CommandTimeout = 10 };
+        await using var command = new SqlCommand(WhoIsActiveSql, connection) { CommandTimeout = 10 };
         await using var reader = await command.ExecuteReaderAsync(token);
         var rows = new List<IReadOnlyDictionary<string, object?>>();
         while (await reader.ReadAsync(token) && rows.Count < 100)
@@ -338,8 +331,17 @@ public sealed class LiveOperationsStore
 
         await using var connection = new SqlConnection(_managementConnection);
         await connection.OpenAsync(token);
-        await using var command = new SqlCommand("SELECT COUNT(*) FROM dbo.Servers WHERE IsActive = 1", connection);
-        var activeServerCount = Convert.ToInt32(await command.ExecuteScalarAsync(token));
+        await using var command = new SqlCommand("SELECT COUNT(*) AS ActiveServerCount, SUM(CASE WHEN Id = @ServerId THEN 1 ELSE 0 END) AS MatchingServerCount FROM dbo.Servers WHERE IsActive = 1", connection);
+        command.Parameters.AddWithValue("@ServerId", serverId);
+        int activeServerCount, matchingServerCount;
+        await using (var reader = await command.ExecuteReaderAsync(token))
+        {
+            await reader.ReadAsync(token);
+            activeServerCount = Convert.ToInt32(reader["ActiveServerCount"]);
+            matchingServerCount = reader.IsDBNull(reader.GetOrdinal("MatchingServerCount")) ? 0 : Convert.ToInt32(reader["MatchingServerCount"]);
+        }
+        if (matchingServerCount == 0)
+            throw new ArgumentException($"Server {serverId} is unknown or inactive.", nameof(serverId));
 
         // The default source connection is sufficient for a single-server
         // installation even when that server's identity is not 1 (for

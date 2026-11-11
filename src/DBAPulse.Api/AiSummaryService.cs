@@ -29,13 +29,30 @@ public sealed class AiSettingsStore
     public AiSettings Current { get { lock (_sync) return _settings; } }
     public void Update(AiSettingsUpdate update)
     {
-        lock (_sync) { _settings = _settings with {
+        var requestedBaseUrl = string.IsNullOrWhiteSpace(update.BaseUrl) ? null : update.BaseUrl.Trim().TrimEnd('/');
+        if (requestedBaseUrl is not null) ValidateBaseUrl(requestedBaseUrl);
+        lock (_sync) {
+            var baseUrl = requestedBaseUrl ?? _settings.BaseUrl;
+            // Never send the stored API key to a new endpoint unless it is re-entered in the same request.
+            var endpointChanged = !string.Equals(baseUrl, _settings.BaseUrl.Trim().TrimEnd('/'), StringComparison.OrdinalIgnoreCase);
+            var apiKey = !string.IsNullOrWhiteSpace(update.ApiKey) ? update.ApiKey.Trim() : endpointChanged ? string.Empty : _settings.ApiKey;
+            _settings = _settings with {
             Provider = string.IsNullOrWhiteSpace(update.Provider) ? _settings.Provider : update.Provider.Trim(),
             Model = string.IsNullOrWhiteSpace(update.Model) ? _settings.Model : update.Model.Trim(),
-            BaseUrl = string.IsNullOrWhiteSpace(update.BaseUrl) ? _settings.BaseUrl : update.BaseUrl.Trim().TrimEnd('/'),
+            BaseUrl = baseUrl,
             Protocol = string.IsNullOrWhiteSpace(update.Protocol) ? _settings.Protocol : update.Protocol.Trim(),
-            ApiKey = string.IsNullOrWhiteSpace(update.ApiKey) ? _settings.ApiKey : update.ApiKey.Trim()
+            ApiKey = apiKey
         }; _persistence.Save("ai-settings.json", _settings); }
+    }
+    private static readonly string[] PlainHttpHosts = { "dbapulse-ollama", "localhost", "127.0.0.1", "::1" };
+    private static void ValidateBaseUrl(string baseUrl)
+    {
+        if (!Uri.TryCreate(baseUrl, UriKind.Absolute, out var uri) || (uri.Scheme != Uri.UriSchemeHttps && uri.Scheme != Uri.UriSchemeHttp) || string.IsNullOrEmpty(uri.Host))
+            throw new ArgumentException("AI base URL must be an absolute http(s) URL.", nameof(baseUrl));
+        if (!string.IsNullOrEmpty(uri.UserInfo) || !string.IsNullOrEmpty(uri.Query) || !string.IsNullOrEmpty(uri.Fragment))
+            throw new ArgumentException("AI base URL must not contain credentials, a query string or a fragment.", nameof(baseUrl));
+        if (uri.Scheme == Uri.UriSchemeHttp && !PlainHttpHosts.Contains(uri.IdnHost.Trim('[', ']'), StringComparer.OrdinalIgnoreCase))
+            throw new ArgumentException("AI base URL must use https (plain http is only allowed for the local dbapulse-ollama container or localhost).", nameof(baseUrl));
     }
     public AiSettingsView View() { var s = Current; return new(s.Provider, s.Model, s.BaseUrl, s.Protocol, !string.IsNullOrWhiteSpace(s.ApiKey) && !string.Equals(s.Provider, "none", StringComparison.OrdinalIgnoreCase)); }
 }
@@ -47,6 +64,7 @@ public sealed class AiSummaryService
     private readonly DashboardStore _dashboard;
     private readonly ManagementReadStore _management;
     private readonly ILogger<AiSummaryService> _logger;
+    private const string GenericProviderError = "AI provider request failed. Check the API logs for details.";
     public AiSummaryService(HttpClient http, AiSettingsStore settings, DashboardStore dashboard, ManagementReadStore management, ILogger<AiSummaryService> logger) { _http = http; _settings = settings; _dashboard = dashboard; _management = management; _logger = logger; }
 
     public async Task<(bool Success, string Message)> TestAsync(CancellationToken token)
@@ -66,10 +84,12 @@ public sealed class AiSummaryService
                     : new { model = settings.Model, input = "Reply with OK.", store = false };
             request.Content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
             using var response = await _http.SendAsync(request, token);
-            return response.IsSuccessStatusCode ? (true, "AI provider connection successful.") : ((int)response.StatusCode == 401 ? (false, "The API key was rejected by the provider.") : (false, $"Provider returned HTTP {(int)response.StatusCode}."));
+            if (response.IsSuccessStatusCode) return (true, "AI provider connection successful.");
+            _logger.LogWarning("AI provider test returned HTTP {StatusCode} for {BaseUrl}", (int)response.StatusCode, settings.BaseUrl);
+            return (false, GenericProviderError);
         }
         catch (TaskCanceledException ex) when (!token.IsCancellationRequested) { _logger.LogWarning(ex, "AI provider test timed out for {BaseUrl}", settings.BaseUrl); return (false, "AI provider request timed out."); }
-        catch (HttpRequestException ex) { _logger.LogWarning(ex, "AI provider test network/TLS error for {BaseUrl}", settings.BaseUrl); return (false, $"AI provider network/TLS error: {ex.Message}"); }
+        catch (HttpRequestException ex) { _logger.LogWarning(ex, "AI provider test network/TLS error for {BaseUrl}", settings.BaseUrl); return (false, GenericProviderError); }
     }
     public async Task<AiSummaryResponse> SummarizeAsync(int serverId, CancellationToken token)
     {
@@ -94,13 +114,13 @@ public sealed class AiSummaryService
             request.Content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
             using var response = await _http.SendAsync(request, token);
             var body = await response.Content.ReadAsStringAsync(token);
-            if (!response.IsSuccessStatusCode) return new(true, settings.Provider, settings.Model, string.Empty, $"AI request failed ({(int)response.StatusCode}).");
+            if (!response.IsSuccessStatusCode) { _logger.LogWarning("AI summary returned HTTP {StatusCode} for {BaseUrl}", (int)response.StatusCode, settings.BaseUrl); return new(true, settings.Provider, settings.Model, string.Empty, GenericProviderError); }
             using var json = JsonDocument.Parse(body);
             var text = IsGemini(settings) ? ExtractGeminiText(json.RootElement) : json.RootElement.TryGetProperty("output_text", out var output) ? output.GetString() : string.Equals(settings.Protocol, "chat-completions", StringComparison.OrdinalIgnoreCase) ? ExtractChatText(json.RootElement) : ExtractText(json.RootElement);
             return new(true, settings.Provider, settings.Model, text ?? "AI response did not contain text.", null);
         }
         catch (TaskCanceledException ex) when (!token.IsCancellationRequested) { _logger.LogWarning(ex, "AI summary request timed out for {BaseUrl}", settings.BaseUrl); return new(true, settings.Provider, settings.Model, string.Empty, "AI provider request timed out."); }
-        catch (HttpRequestException ex) { _logger.LogWarning(ex, "AI summary network/TLS error for {BaseUrl}", settings.BaseUrl); return new(true, settings.Provider, settings.Model, string.Empty, $"AI provider network/TLS error: {ex.Message}"); }
+        catch (HttpRequestException ex) { _logger.LogWarning(ex, "AI summary network/TLS error for {BaseUrl}", settings.BaseUrl); return new(true, settings.Provider, settings.Model, string.Empty, GenericProviderError); }
         catch (JsonException ex) { _logger.LogWarning(ex, "AI provider returned invalid JSON for {BaseUrl}", settings.BaseUrl); return new(true, settings.Provider, settings.Model, string.Empty, "AI provider returned an invalid response."); }
     }
 
@@ -125,13 +145,13 @@ public sealed class AiSummaryService
             request.Content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
             using var response = await _http.SendAsync(request, token);
             var body = await response.Content.ReadAsStringAsync(token);
-            if (!response.IsSuccessStatusCode) return new(true, settings.Provider, settings.Model, string.Empty, $"AI request failed ({(int)response.StatusCode}).");
+            if (!response.IsSuccessStatusCode) { _logger.LogWarning("Object AI summary returned HTTP {StatusCode} for {BaseUrl}", (int)response.StatusCode, settings.BaseUrl); return new(true, settings.Provider, settings.Model, string.Empty, GenericProviderError); }
             using var json = JsonDocument.Parse(body);
             var text = IsGemini(settings) ? ExtractGeminiText(json.RootElement) : json.RootElement.TryGetProperty("output_text", out var output) ? output.GetString() : string.Equals(settings.Protocol, "chat-completions", StringComparison.OrdinalIgnoreCase) ? ExtractChatText(json.RootElement) : ExtractText(json.RootElement);
             return new(true, settings.Provider, settings.Model, text ?? "AI response did not contain text.", null);
         }
         catch (TaskCanceledException ex) when (!token.IsCancellationRequested) { _logger.LogWarning(ex, "Object AI summary request timed out for {BaseUrl}", settings.BaseUrl); return new(true, settings.Provider, settings.Model, string.Empty, "AI provider request timed out."); }
-        catch (HttpRequestException ex) { _logger.LogWarning(ex, "Object AI summary network/TLS error for {BaseUrl}", settings.BaseUrl); return new(true, settings.Provider, settings.Model, string.Empty, $"AI provider network/TLS error: {ex.Message}"); }
+        catch (HttpRequestException ex) { _logger.LogWarning(ex, "Object AI summary network/TLS error for {BaseUrl}", settings.BaseUrl); return new(true, settings.Provider, settings.Model, string.Empty, GenericProviderError); }
         catch (JsonException ex) { _logger.LogWarning(ex, "AI provider returned invalid object summary JSON for {BaseUrl}", settings.BaseUrl); return new(true, settings.Provider, settings.Model, string.Empty, "AI provider returned an invalid response."); }
     }
 
@@ -157,7 +177,7 @@ public sealed class AiSummaryService
                     : new { model = settings.Model, input = prompt, store = false, stream = true };
             request.Content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
             using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token);
-            if (!response.IsSuccessStatusCode) { await WriteEventAsync(output, "error", $"AI request failed ({(int)response.StatusCode}).", token); return; }
+            if (!response.IsSuccessStatusCode) { _logger.LogWarning("AI summary stream returned HTTP {StatusCode} for {BaseUrl}", (int)response.StatusCode, settings.BaseUrl); await WriteEventAsync(output, "error", GenericProviderError, token); return; }
             await using var body = await response.Content.ReadAsStreamAsync(token);
             using var reader = new StreamReader(body);
             while (await reader.ReadLineAsync(token) is { } line)
@@ -177,7 +197,7 @@ public sealed class AiSummaryService
             await WriteEventAsync(output, "done", string.Empty, token);
         }
         catch (TaskCanceledException) when (!token.IsCancellationRequested) { _logger.LogWarning("AI summary stream timed out for {BaseUrl}", settings.BaseUrl); await WriteEventAsync(output, "error", "AI provider request timed out.", CancellationToken.None); }
-        catch (HttpRequestException ex) { _logger.LogWarning(ex, "AI summary stream network/TLS error for {BaseUrl}", settings.BaseUrl); await WriteEventAsync(output, "error", $"AI provider network/TLS error: {ex.Message}", token); }
+        catch (HttpRequestException ex) { _logger.LogWarning(ex, "AI summary stream network/TLS error for {BaseUrl}", settings.BaseUrl); await WriteEventAsync(output, "error", GenericProviderError, token); }
     }
 
     private static async Task WriteEventAsync(Stream output, string eventName, string data, CancellationToken token)

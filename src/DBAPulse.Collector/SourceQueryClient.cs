@@ -1,4 +1,5 @@
 using System.Data;
+using System.Runtime.CompilerServices;
 using Microsoft.Data.SqlClient;
 using DBAPulse.Domain;
 
@@ -14,7 +15,7 @@ public sealed class SourceQueryClient
     public Task<List<DatabaseInventory>> ReadDatabasesAsync(CancellationToken token) => QueryAsync("inventory/databases.sql", ReadDatabase, token);
     public Task<List<BackupInventory>> ReadBackupsAsync(CancellationToken token) => QueryAsync("backup/last-backups.sql", ReadBackup, token);
     public Task<List<JobInventory>> ReadJobsAsync(CancellationToken token) => QueryAsync("jobs/job-status.sql", ReadJob, token);
-    public Task<List<AlwaysOnInventory>> ReadAlwaysOnAsync(CancellationToken token) => QueryAsync("alwayson/ag-health.sql", ReadAlwaysOn, token).ContinueWith(t => t.Result.Where(x => !string.Equals(x.AvailabilityGroupName, "NotConfigured", StringComparison.OrdinalIgnoreCase)).ToList(), token);
+    public async Task<List<AlwaysOnInventory>> ReadAlwaysOnAsync(CancellationToken token) => (await QueryAsync("alwayson/ag-health.sql", ReadAlwaysOn, token)).Where(x => !string.Equals(x.AvailabilityGroupName, "NotConfigured", StringComparison.OrdinalIgnoreCase)).ToList();
     public Task<List<CapacityInventory>> ReadCapacityAsync(CancellationToken token) => QueryAsync("capacity/database-size.sql", ReadCapacity, token);
     public Task<List<VolumeInventory>> ReadVolumesAsync(CancellationToken token) => QueryAsync("capacity/volumes.sql", ReadVolume, token);
     public Task<List<BlockingInventory>> ReadBlockingAsync(CancellationToken token) => QueryAsync("performance/blocking.sql", ReadBlocking, token);
@@ -41,7 +42,7 @@ public sealed class SourceQueryClient
 
     private static ServerInventory ReadServer(SqlDataReader r) => new(S(r, "server_name"), S(r, "instance_name"), S(r, "product_version"), S(r, "edition"), L(r, "uptime_seconds"));
     private static DatabaseInventory ReadDatabase(SqlDataReader r) => new(S(r, "database_name"), S(r, "recovery_model_desc"), S(r, "state_desc"), S(r, "user_access_desc"), I(r, "compatibility_level"), B(r, "is_read_only"), B(r, "is_encrypted"), B(r, "is_mirrored"), SNullable(r, "mirroring_role"));
-    private static BackupInventory ReadBackup(SqlDataReader r) => new(S(r, "database_name"), S(r, "backup_type"), D(r, "backup_start_date"), D(r, "backup_finish_date"), Dec(r, "backup_size_mb"), Dec(r, "compressed_backup_size_mb"), B(r, "is_copy_only"), INullable(r, "duration_seconds"));
+    private static BackupInventory ReadBackup(SqlDataReader r) => new(S(r, "database_name"), S(r, "backup_type"), D(r, "backup_start_date"), D(r, "backup_finish_date"), Dec(r, "backup_size_mb"), Dec(r, "compressed_backup_size_mb"), B(r, "is_copy_only"), INullable(r, "duration_seconds"), D(r, "backup_finish_date_utc"));
     private static JobInventory ReadJob(SqlDataReader r) => new(S(r, "job_id"), S(r, "job_name"), B(r, "enabled"), S(r, "last_run_status"), JobDate(r), INullable(r, "last_run_duration_seconds"), SNullable(r, "last_run_message"), B(r, "is_running"), D(r, "current_start_at_source"), INullable(r, "current_duration_seconds"), D(r, "next_run_at_source"), I(r, "failure_count_24h"), I(r, "failure_count_7d"), B(r, "repeated_failure"), INullable(r, "average_duration_seconds"), INullable(r, "max_duration_seconds"));
     private static AlwaysOnInventory ReadAlwaysOn(SqlDataReader r) => new(SNullable(r, "availability_group_name") ?? SNullable(r, "status") ?? "NotConfigured", SNullable(r, "replica_server_name"), SNullable(r, "role_desc"), SNullable(r, "operational_state_desc"), SNullable(r, "connected_state_desc"), SNullable(r, "synchronization_health_desc"), SNullable(r, "database_name"), SNullable(r, "synchronization_state_desc"), SNullable(r, "database_state_desc"), B(r, "is_suspended"), SNullable(r, "suspend_reason"), DecNullable(r, "log_send_queue_mb"), DecNullable(r, "redo_queue_mb"), DecNullable(r, "log_send_rate_mb"), DecNullable(r, "redo_rate_mb"), D(r, "last_commit_time_source"));
     private static CapacityInventory ReadCapacity(SqlDataReader r) => new(S(r, "database_name"), string.IsNullOrWhiteSpace(S(r, "file_type")) ? "DATA" : S(r, "file_type"), Dec(r, "allocated_size_mb") ?? 0, I(r, "file_count"));
@@ -68,5 +69,6 @@ public sealed class SourceQueryClient
     private static decimal? Dec(SqlDataReader r, string name) => !Has(r, name) || r.IsDBNull(Ord(r, name)) ? null : Convert.ToDecimal(r.GetValue(Ord(r, name)));
     private static decimal? DecNullable(SqlDataReader r, string name) => Has(r, name) && !r.IsDBNull(Ord(r, name)) ? Convert.ToDecimal(r.GetValue(Ord(r, name))) : null;
     private static string? N(SqlDataReader r, string name) => Has(r, name) && !r.IsDBNull(Ord(r, name)) ? Convert.ToString(r.GetValue(Ord(r, name))) : null;
-    private static bool Has(SqlDataReader r, string name) { try { _ = r.GetOrdinal(name); return true; } catch (IndexOutOfRangeException) { return false; } }
+    private static readonly ConditionalWeakTable<SqlDataReader, HashSet<string>> ColumnCache = new();
+    private static bool Has(SqlDataReader r, string name) => ColumnCache.GetValue(r, reader => new HashSet<string>(Enumerable.Range(0, reader.FieldCount).Select(reader.GetName), StringComparer.OrdinalIgnoreCase)).Contains(name);
 }

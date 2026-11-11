@@ -31,7 +31,7 @@ public sealed class AuditMiddleware
         }
         catch (Exception ex)
         {
-            statusCode = StatusCodes.Status500InternalServerError; result = "Failed";
+            statusCode = ex is ArgumentException ? StatusCodes.Status400BadRequest : StatusCodes.Status500InternalServerError; result = "Failed";
             failureMessage = Limit(ex.GetBaseException().Message, 1500);
             _logger.LogError(ex, "Audited request failed: {Action} {Path} CorrelationId={CorrelationId}", action, context.Request.Path, correlationId);
             throw;
