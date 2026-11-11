@@ -29,12 +29,18 @@ public sealed class SmtpSettingsStore
     public SmtpSettings Current { get { lock (_sync) return _settings; } }
     public void Update(SmtpSettingsUpdate update)
     {
-        lock (_sync) { _settings = _settings with {
-            Host = string.IsNullOrWhiteSpace(update.Host) ? _settings.Host : update.Host.Trim(),
-            Port = update.Port is > 0 and < 65536 ? update.Port.Value : _settings.Port,
+        lock (_sync) {
+            var host = string.IsNullOrWhiteSpace(update.Host) ? _settings.Host : update.Host.Trim();
+            var port = update.Port is > 0 and < 65536 ? update.Port.Value : _settings.Port;
+            // Never send the stored password to a new endpoint unless it is re-entered in the same request.
+            var endpointChanged = !string.Equals(host, _settings.Host, StringComparison.OrdinalIgnoreCase) || port != _settings.Port;
+            var password = !string.IsNullOrWhiteSpace(update.Password) ? update.Password.Trim() : endpointChanged ? string.Empty : _settings.Password;
+            _settings = _settings with {
+            Host = host,
+            Port = port,
             Security = string.IsNullOrWhiteSpace(update.Security) ? _settings.Security : update.Security.Trim().ToLowerInvariant(),
             Username = update.Username?.Trim() ?? _settings.Username,
-            Password = string.IsNullOrWhiteSpace(update.Password) ? _settings.Password : update.Password.Trim(),
+            Password = password,
             FromEmail = update.FromEmail?.Trim() ?? _settings.FromEmail,
             FromName = update.FromName?.Trim() ?? _settings.FromName
         }; _persistence.Save("smtp-settings.json", _settings); }

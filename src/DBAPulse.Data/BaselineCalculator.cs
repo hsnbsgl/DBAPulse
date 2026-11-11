@@ -4,6 +4,7 @@ namespace DBAPulse.Data;
 
 public sealed class BaselineCalculator
 {
+    private const int SeasonalMinDays = 3;
     public IReadOnlyList<BaselineResult> Calculate(IEnumerable<AnomalySample> source, DateTime asOfUtc, int windowDays, int minSamples, int minDays, string timeZoneId)
     {
         var zone = FindTimeZone(timeZoneId);
@@ -31,7 +32,10 @@ public sealed class BaselineCalculator
         var mean = values.Average();
         var variance = values.Length > 1 ? values.Sum(x => Math.Pow((double)(x - mean), 2)) / (values.Length - 1) : 0;
         var historyDays = materialized.Select(x => TimeZoneInfo.ConvertTime(x.ObservedAtUtc, zone).Date).Distinct().Count();
-        var status = values.Length >= minSamples && historyDays >= minDays ? "Usable" : "InsufficientData";
+        // A Seasonal (day-of-week x hour) bucket sees each calendar date at most once a week (~4-5 dates in a 30-day window),
+        // so the global min-distinct-days threshold (default 7) would never be met; cap it for that scope.
+        var requiredDays = scope == "Seasonal" ? Math.Min(minDays, SeasonalMinDays) : minDays;
+        var status = values.Length >= minSamples && historyDays >= requiredDays ? "Usable" : "InsufficientData";
         return new(key.Metric, key.Server, key.Database, key.Entity, dow, hour, windowDays, values.Length, median, Percentile(values, .75m), Percentile(values, .90m), Percentile(values, .95m), Percentile(values, .99m), mean, (decimal)Math.Sqrt(variance), Percentile(deviations, .50m), values[0], values[^1], asOf, asOf.AddDays(-windowDays), status, scope);
     }
 

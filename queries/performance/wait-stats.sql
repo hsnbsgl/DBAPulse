@@ -3,7 +3,8 @@ SELECT
     CONVERT(bigint, ws.wait_time_ms) AS wait_time_ms,
     CONVERT(bigint, ws.signal_wait_time_ms) AS signal_wait_time_ms,
     CONVERT(bigint, ws.waiting_tasks_count) AS waiting_tasks_count,
-    CONVERT(datetime2(3), si.sqlserver_start_time) AS sql_server_start_time
+    /* sqlserver_start_time is source-local; stored as SqlServerStartTimeUtc, so convert with the current UTC offset. */
+    CONVERT(datetime2(3), DATEADD(MINUTE, -DATEPART(TZOFFSET, SYSDATETIMEOFFSET()), si.sqlserver_start_time)) AS sql_server_start_time
 FROM sys.dm_os_wait_stats AS ws
 CROSS JOIN sys.dm_os_sys_info AS si
 WHERE ws.wait_type NOT IN

@@ -10,4 +10,6 @@ RUN dotnet publish src/DBAPulse.Collector/DBAPulse.Collector.csproj -c Release -
 FROM mcr.microsoft.com/dotnet/runtime:8.0 AS runtime
 WORKDIR /app
 COPY --from=build /out .
+# The collector only reads env + bundled SQL files; run it without root.
+USER app
 ENTRYPOINT ["dotnet", "DBAPulse.Collector.dll"]

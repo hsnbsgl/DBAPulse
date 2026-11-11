@@ -7,5 +7,7 @@ SELECT
     CAST(SERVERPROPERTY(N'ProductLevel') AS nvarchar(128)) AS product_level,
     CAST(SERVERPROPERTY(N'Edition') AS nvarchar(256)) AS edition,
     osi.sqlserver_start_time,
-    DATEDIFF_BIG(SECOND, osi.sqlserver_start_time, SYSUTCDATETIME()) AS uptime_seconds
+    /* sqlserver_start_time is source-local: convert to UTC with the current offset and measure uptime in local time. */
+    CONVERT(datetime2(3), DATEADD(MINUTE, -DATEPART(TZOFFSET, SYSDATETIMEOFFSET()), osi.sqlserver_start_time)) AS sqlserver_start_time_utc,
+    DATEDIFF_BIG(SECOND, osi.sqlserver_start_time, SYSDATETIME()) AS uptime_seconds
 FROM sys.dm_os_sys_info AS osi;

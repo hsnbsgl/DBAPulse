@@ -191,7 +191,7 @@ if [[ "$healthy" != true ]]; then
 fi
 
 printf '\nKurulum tamamlandı.\n'
-printf 'Web:   https://localhost:${web_https_port}\n'
+printf 'Web:   https://localhost:%s\n' "$web_https_port"
 printf 'Admin: %s\n' "$admin_user"
 printf 'AI:    %s' "$ai_provider"
 [[ "$install_llm" == true ]] && printf ' / %s' "$llm_model"

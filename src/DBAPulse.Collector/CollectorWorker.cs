@@ -1,5 +1,6 @@
 using System.Data;
 using System.Diagnostics;
+using System.Text.Json;
 using DBAPulse.Data;
 using DBAPulse.Domain;
 using Microsoft.Extensions.Hosting;
@@ -46,12 +47,27 @@ public sealed class CollectorWorker : BackgroundService
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         _logger.LogInformation("DBA Pulse Collector starting; display timezone {TimeZone}", _timeZone);
+        var consecutiveFailures = 0;
         do
         {
-            await CollectAsync(stoppingToken);
+            var delay = _interval;
+            try
+            {
+                await CollectAsync(stoppingToken);
+                consecutiveFailures = 0;
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { break; }
+            catch (Exception ex)
+            {
+                // Never let a transient failure (e.g. management database unavailable) stop the host; back off and retry.
+                consecutiveFailures++;
+                delay = TimeSpan.FromSeconds(Math.Min(300, 30 * Math.Pow(2, Math.Min(consecutiveFailures - 1, 4))));
+                _logger.LogError(ex, "Collection cycle failed ({Failures} consecutive); retrying in {DelaySeconds} s", consecutiveFailures, delay.TotalSeconds);
+            }
             if (_runOnce) { _lifetime.StopApplication(); break; }
-            await Task.Delay(_interval, stoppingToken);
-        } while (!_runOnce && !stoppingToken.IsCancellationRequested);
+            try { await Task.Delay(delay, stoppingToken); }
+            catch (OperationCanceledException) { break; }
+        } while (!stoppingToken.IsCancellationRequested);
     }
 
     private async Task CollectAsync(CancellationToken token)
@@ -188,7 +204,7 @@ public sealed class CollectorWorker : BackgroundService
                 _logger.LogInformation("DeadlockEvents {Count} new rows inserted", await _store.InsertDeadlocksAsync(rows, serverId, databaseIds, performanceCapturedAtUtc, token));
                 _logger.LogInformation("Deadlock operational events correlated: {Count}", await _store.UpsertOperationalEventsAsync(_correlator.Deadlocks(rows, serverId, performanceCapturedAtUtc), performanceCapturedAtUtc, token));
             }, token);
-            if (errors == 0)
+            // Anomaly evaluation runs even when a domain failed; it only works on samples that were collected.
             {
                 try
                 {
@@ -200,7 +216,7 @@ public sealed class CollectorWorker : BackgroundService
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
-                    errors++; _logger.LogError(ex, "Anomaly evaluation failed; raw collection remains available"); await _store.InsertErrorAsync(runId, "baseline/anomaly-evaluation", _sourceTarget, ex.Message, token);
+                    errors++; _logger.LogError(ex, "Anomaly evaluation failed; raw collection remains available"); await TryRecordAsync(() => _store.InsertErrorAsync(runId, "baseline/anomaly-evaluation", _sourceTarget, ex.Message, token), "anomaly evaluation error");
                 }
             }
             stopwatch.Stop();
@@ -212,14 +228,28 @@ public sealed class CollectorWorker : BackgroundService
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
+            if (runId == 0) throw; // run could not even be started (management DB unreachable): let ExecuteAsync back off
             stopwatch.Stop();
             _logger.LogError(ex, "Collection #{RunId} failed", runId);
             if (runId != 0)
             {
-                await _store.InsertErrorAsync(runId, "collection", _sourceTarget, ex.Message, token);
-                await _store.CompleteRunAsync(runId, "Failed", DateTime.UtcNow, stopwatch.ElapsedMilliseconds, token);
+                await TryRecordAsync(() => _store.InsertErrorAsync(runId, "collection", _sourceTarget, ex.Message, token), "collection error");
+                await TryRecordAsync(() => _store.CompleteRunAsync(runId, "Failed", DateTime.UtcNow, stopwatch.ElapsedMilliseconds, token), "failed run status");
             }
         }
+        catch (OperationCanceledException) when (runId != 0)
+        {
+            stopwatch.Stop();
+            using var statusTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            await TryRecordAsync(() => _store.CompleteRunAsync(runId, "Cancelled", DateTime.UtcNow, stopwatch.ElapsedMilliseconds, statusTimeout.Token), "cancelled run status");
+            throw;
+        }
+    }
+
+    private async Task TryRecordAsync(Func<Task> action, string what)
+    {
+        try { await action(); }
+        catch (Exception ex) { _logger.LogWarning(ex, "Could not record {What} in the management database", what); }
     }
 
     private async Task<int> RunDomainAsync(long runId, string queryName, Func<Task> action, CancellationToken token)
@@ -228,7 +258,7 @@ public sealed class CollectorWorker : BackgroundService
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.LogError(ex, "{QueryName} failed; continuing collection", queryName);
-            await _store.InsertErrorAsync(runId, queryName, _sourceTarget, ex.Message, token);
+            await TryRecordAsync(() => _store.InsertErrorAsync(runId, queryName, _sourceTarget, ex.Message, token), $"{queryName} error");
             return 1;
         }
     }
@@ -245,7 +275,7 @@ public sealed class CollectorWorker : BackgroundService
         var eventType = finding.MetricType switch { "JobDuration" => "JobDurationAnomaly", "BackupDuration" => "BackupDurationAnomaly", "DatabaseGrowth" => "GrowthAnomaly", _ => "PerformanceAnomaly" };
         var title = $"{finding.MetricType} anomaly";
         var summary = $"Observed {finding.ObservedValue:0.##}; historical median {finding.BaselineMedian:0.##}, P95 {finding.BaselineP95:0.##}. {finding.ExplanationCode}.";
-        return new(eventType, finding.ServerId, finding.DatabaseId, finding.Fingerprint, finding.ObservedAtUtc, finding.ObservedAtUtc, 0, finding.Status, finding.Severity, 1, null, title, summary, finding.SourceEntityId, $"{{\"metricType\":\"{finding.MetricType}\",\"baselineScope\":\"{finding.BaselineScope}\",\"sampleCount\":{finding.SampleCount}}}");
+        return new(eventType, finding.ServerId, finding.DatabaseId, finding.Fingerprint, finding.ObservedAtUtc, finding.ObservedAtUtc, 0, finding.Status, finding.Severity, 1, null, title, summary, finding.SourceEntityId, JsonSerializer.Serialize(new { metricType = finding.MetricType, baselineScope = finding.BaselineScope, sampleCount = finding.SampleCount }));
     }
     private static DataTable Table(params (string Name, Type Type)[] columns) { var t = new DataTable(); foreach (var c in columns) t.Columns.Add(c.Name, c.Type); return t; }
     private static object Db(object? value) => value ?? DBNull.Value;

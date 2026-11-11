@@ -29,13 +29,19 @@ public sealed class AdSettingsStore
     public AdSettings Current { get { lock (_sync) return _settings; } }
     public void Update(AdSettingsUpdate update)
     {
-        lock (_sync) { _settings = _settings with {
+        lock (_sync) {
+            var host = update.Host?.Trim() ?? _settings.Host;
+            var port = update.Port is > 0 and < 65536 ? update.Port.Value : _settings.Port;
+            // Never send the stored bind password to a new endpoint unless it is re-entered in the same request.
+            var endpointChanged = !string.Equals(host, _settings.Host, StringComparison.OrdinalIgnoreCase) || port != _settings.Port;
+            var password = !string.IsNullOrWhiteSpace(update.Password) ? update.Password.Trim() : endpointChanged ? string.Empty : _settings.Password;
+            _settings = _settings with {
             Domain = update.Domain?.Trim() ?? _settings.Domain,
-            Host = update.Host?.Trim() ?? _settings.Host,
-            Port = update.Port is > 0 and < 65536 ? update.Port.Value : _settings.Port,
+            Host = host,
+            Port = port,
             BaseDn = update.BaseDn?.Trim() ?? _settings.BaseDn,
             Username = update.Username?.Trim() ?? _settings.Username,
-            Password = string.IsNullOrWhiteSpace(update.Password) ? _settings.Password : update.Password.Trim(),
+            Password = password,
             UseSsl = update.UseSsl ?? _settings.UseSsl,
             Enabled = update.Enabled ?? _settings.Enabled
         }; _persistence.Save("ad-settings.json", _settings); }

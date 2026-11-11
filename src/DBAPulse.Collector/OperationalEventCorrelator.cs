@@ -40,9 +40,10 @@ public sealed class OperationalEventCorrelator
         var result = new List<OperationalEventInput>();
         foreach (var db in databases.Where(x => !x.DatabaseName.Equals("tempdb", StringComparison.OrdinalIgnoreCase) && x.DatabaseStatus.Equals("ONLINE", StringComparison.OrdinalIgnoreCase) && IsBackupRequired(serverEnvironment, databaseModes.TryGetValue(x.DatabaseName, out var mode) ? mode : "Auto", x.IsMirrored)))
         {
-            var full = latest.TryGetValue($"{db.DatabaseName}|FULL", out var f) ? f.BackupFinish : null;
-            var differential = latest.TryGetValue($"{db.DatabaseName}|DIFFERENTIAL", out var d) ? d.BackupFinish : null;
-            var log = latest.TryGetValue($"{db.DatabaseName}|LOG", out var l) ? l.BackupFinish : null;
+            // Ages are measured against UTC: prefer the source-computed UTC finish time; BackupFinish is source-local (msdb).
+            var full = latest.TryGetValue($"{db.DatabaseName}|FULL", out var f) ? f.BackupFinishUtc ?? f.BackupFinish : null;
+            var differential = latest.TryGetValue($"{db.DatabaseName}|DIFFERENTIAL", out var d) ? d.BackupFinishUtc ?? d.BackupFinish : null;
+            var log = latest.TryGetValue($"{db.DatabaseName}|LOG", out var l) ? l.BackupFinishUtc ?? l.BackupFinish : null;
             var dataBackup = full.HasValue && (!differential.HasValue || full.Value >= differential.Value) ? full : differential;
             var dataBackupMinutes = dataBackup.HasValue ? Math.Max(0, (DateTime.UtcNow - dataBackup.Value).TotalMinutes) : double.MaxValue;
             var logMinutes = log.HasValue ? Math.Max(0, (DateTime.UtcNow - log.Value).TotalMinutes) : double.MaxValue;

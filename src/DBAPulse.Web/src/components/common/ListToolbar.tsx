@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import { IconButton, MenuItem, Select, Stack, Tooltip, Typography } from '@mui/material';
 import RefreshIcon from '@mui/icons-material/Refresh';
-import * as XLSX from 'xlsx';
 
 export const ALL_RECORDS = -1;
 
@@ -68,9 +67,10 @@ const createPdf = (rows: unknown[]) => {
   return pdf;
 };
 
-export const exportRows = (filename: string, rows: unknown[], format: Exclude<ExportFormat, ''>) => {
+export const exportRows = async (filename: string, rows: unknown[], format: Exclude<ExportFormat, ''>) => {
   const records = asRecords(rows);
   if (format === 'xlsx' || format === 'csv') {
+    const XLSX = await import('xlsx'); // loaded on demand to keep the spreadsheet library out of the main bundle
     const worksheet = XLSX.utils.json_to_sheet(records);
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, 'Data');
@@ -88,7 +88,7 @@ export default function ListToolbar({ filename, rows, pageSize, onPageSizeChange
   const [format, setFormat] = useState<ExportFormat>('');
   const handleExport = (value: ExportFormat) => {
     setFormat('');
-    if (value) exportRows(filename, rows, value);
+    if (value) exportRows(filename, rows, value).catch(error => console.error('Export failed', error));
   };
   return <Stack direction="row" spacing={1} alignItems="center" justifyContent="flex-end" flexWrap="wrap" useFlexGap sx={{ my: 1 }}>
     {showPageSize && pageSize != null && onPageSizeChange && <><Typography variant="caption" color="text.secondary">Records</Typography><Select size="small" value={pageSize} onChange={event => onPageSizeChange(Number(event.target.value))}>{[10, 20, 30, 40, 50].map(size => <MenuItem key={size} value={size}>{size}</MenuItem>)}<MenuItem value={ALL_RECORDS}>All records</MenuItem></Select></>}

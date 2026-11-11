@@ -1,5 +1,5 @@
-import type { ReactNode } from 'react';
-import { Alert, Box, Card, CardContent, Chip, CircularProgress, Paper, Skeleton, Stack, Typography } from '@mui/material';
+import type { KeyboardEvent, ReactNode } from 'react';
+import { Alert, Box, Card, CardContent, Chip, CircularProgress, Paper, Skeleton, Stack, TableRow, Typography, type TableRowProps } from '@mui/material';
 
 const labelFor = (value: string) => value.replace(/([a-z])([A-Z])/g, '$1 $2');
 
@@ -56,3 +56,13 @@ export function FreshnessIndicator({ value }: { value?: string | null }) {
 }
 
 export function Spinner() { return <Box className="loading-state"><CircularProgress size={26} /></Box>; }
+
+/** Table row that acts as a control: focusable and activatable with Enter/Space as well as the mouse. */
+export function ClickableRow({ onClick, onKeyDown, className, ...props }: Omit<TableRowProps, 'onClick'> & { onClick: () => void }) {
+  const handleKeyDown = (event: KeyboardEvent<HTMLTableRowElement>) => {
+    onKeyDown?.(event);
+    if (event.defaultPrevented || event.target !== event.currentTarget) return;
+    if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onClick(); }
+  };
+  return <TableRow hover tabIndex={0} {...props} className={['clickable', className].filter(Boolean).join(' ')} onClick={() => onClick()} onKeyDown={handleKeyDown} />;
+}

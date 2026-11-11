@@ -6,6 +6,9 @@ using System.Security.Cryptography;
 using System.Text;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.AspNetCore.RateLimiting;
+using System.Threading.RateLimiting;
 
 var builder = WebApplication.CreateBuilder(args);
 var apiConnection = builder.Configuration["DBAPULSE_API_CONNECTION"];
@@ -46,19 +49,48 @@ builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationSc
 {
     options.Cookie.Name = "dbapulse.auth";
     options.Cookie.HttpOnly = true;
-    options.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
+    // nginx terminates TLS in front of the API; the browser only ever sees HTTPS.
+    options.Cookie.SecurePolicy = CookieSecurePolicy.Always;
     options.Cookie.SameSite = SameSiteMode.Strict;
     options.ExpireTimeSpan = TimeSpan.FromHours(8);
     options.SlidingExpiration = true;
     options.Events.OnRedirectToLogin = context => { context.Response.StatusCode = StatusCodes.Status401Unauthorized; return Task.CompletedTask; };
     options.Events.OnRedirectToAccessDenied = context => { context.Response.StatusCode = StatusCodes.Status403Forbidden; return Task.CompletedTask; };
 });
-builder.Services.AddAuthorization();
+builder.Services.AddAuthorization(options => options.AddPolicy("Admin", policy => policy.RequireAuthenticatedUser().RequireRole("Admin")));
 builder.Services.AddProblemDetails();
+builder.Services.AddExceptionHandler<ArgumentExceptionHandler>();
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    // Only nginx (dbapulse-web) on the private docker network is trusted to set X-Forwarded-*.
+    // Container IPs are not stable, so trust the RFC1918 ranges docker allocates bridge networks from
+    // (loopback stays trusted by default). ForwardLimit=1 takes only the entry nginx appended, so a
+    // client-supplied X-Forwarded-For value cannot spoof the audited IP.
+    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+    options.ForwardLimit = 1;
+    options.KnownNetworks.Add(new Microsoft.AspNetCore.HttpOverrides.IPNetwork(System.Net.IPAddress.Parse("10.0.0.0"), 8));
+    options.KnownNetworks.Add(new Microsoft.AspNetCore.HttpOverrides.IPNetwork(System.Net.IPAddress.Parse("172.16.0.0"), 12));
+    options.KnownNetworks.Add(new Microsoft.AspNetCore.HttpOverrides.IPNetwork(System.Net.IPAddress.Parse("192.168.0.0"), 16));
+});
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    // Login: 5 attempts per minute per client IP (real IP thanks to forwarded headers).
+    options.AddPolicy("login", context => RateLimitPartition.GetFixedWindowLimiter(
+        context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+        _ => new FixedWindowRateLimiterOptions { PermitLimit = 5, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
+    // Outbound AI calls and connectivity tests: 10 per minute per user (or IP).
+    options.AddPolicy("outbound", context => RateLimitPartition.GetFixedWindowLimiter(
+        context.User.Identity?.IsAuthenticated == true ? "user:" + (context.User.Identity.Name ?? string.Empty) : "ip:" + (context.Connection.RemoteIpAddress?.ToString() ?? "unknown"),
+        _ => new FixedWindowRateLimiterOptions { PermitLimit = 10, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
+});
 builder.Services.AddCors(options => options.AddPolicy("Development", policy => policy.WithOrigins("http://localhost:5173").AllowAnyHeader().AllowAnyMethod()));
 
 var app = builder.Build();
 
+app.UseForwardedHeaders();
+// Registered IExceptionHandlers (ArgumentException -> 400) run first; anything left is a 500.
+// Raw exception details are only returned in Development to avoid leaking internals.
 app.UseExceptionHandler(exceptionHandlerApp =>
 {
     exceptionHandlerApp.Run(async context =>
@@ -66,6 +98,7 @@ app.UseExceptionHandler(exceptionHandlerApp =>
         var exception = context.Features
             .Get<Microsoft.AspNetCore.Diagnostics.IExceptionHandlerFeature>()?
             .Error;
+        var showDetails = app.Environment.IsDevelopment();
 
         context.Response.ContentType = "application/json";
         context.Response.StatusCode = StatusCodes.Status500InternalServerError;
@@ -73,8 +106,8 @@ app.UseExceptionHandler(exceptionHandlerApp =>
         var payload = new
         {
             error = "An error occurred while processing your request.",
-            detail = exception?.Message ?? "Unknown error",
-            type = exception?.GetType().Name ?? "UnknownException",
+            detail = showDetails ? exception?.Message ?? "Unknown error" : "See the API logs for details using the traceId.",
+            type = showDetails ? exception?.GetType().Name ?? "UnknownException" : null,
             traceId = context.TraceIdentifier
         };
 
@@ -86,6 +119,7 @@ if (app.Environment.IsDevelopment()) app.UseCors("Development");
 app.UseAuthentication();
 app.UseAuthorization();
 app.UseMiddleware<AuditMiddleware>();
+app.UseRateLimiter();
 app.Use(async (context, next) =>
 {
     var isApi = context.Request.Path.StartsWithSegments("/api");
@@ -116,7 +150,7 @@ app.MapPost("/api/auth/login", async (LoginRequest request, HttpContext context,
     var claims = new[] { new Claim(ClaimTypes.Name, expectedUser), new Claim(ClaimTypes.Role, "Admin") };
     await context.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, new ClaimsPrincipal(new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme)));
     return Results.Ok(new { authenticated = true, userName = expectedUser });
-});
+}).RequireRateLimiting("login");
 app.MapGet("/api/auth/me", (HttpContext context) => Results.Ok(new { authenticated = context.User.Identity?.IsAuthenticated ?? false, userName = context.User.Identity?.Name }));
 app.MapPost("/api/auth/logout", async (HttpContext context) => { await context.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme); return Results.Ok(new { authenticated = false }); });
 app.MapGet("/api/health", async (DashboardStore store, CancellationToken token) =>
@@ -131,7 +165,7 @@ app.MapGet("/api/dashboard/capacity", async (DashboardStore store, CancellationT
 app.MapGet("/api/collections/recent", async (int? limit, DashboardStore store, CancellationToken token) => Results.Ok(await store.GetRecentCollectionsAsync(Math.Clamp(limit ?? 20, 1, 100), token)));
 app.MapGet("/api/servers", async (DashboardStore store, CancellationToken token) => Results.Ok(await store.GetServersAsync(token)));
 app.MapGet("/api/servers/{id:int}", async (int id, DashboardStore store, CancellationToken token) => { var value = await store.GetServerDetailAsync(id, token); return value.Server is null ? Results.NotFound() : Results.Ok(value); });
-app.MapPost("/api/servers/{id:int}/ai-summary", async (int id, AiSummaryService service, CancellationToken token) => Results.Ok(await service.SummarizeAsync(id, token)));
+app.MapPost("/api/servers/{id:int}/ai-summary", async (int id, AiSummaryService service, CancellationToken token) => Results.Ok(await service.SummarizeAsync(id, token))).RequireRateLimiting("outbound");
 app.MapPost("/api/servers/{id:int}/ai-summary/stream", async (int id, AiSummaryService service, HttpResponse response, CancellationToken token) =>
 {
     response.StatusCode = StatusCodes.Status200OK;
@@ -139,29 +173,29 @@ app.MapPost("/api/servers/{id:int}/ai-summary/stream", async (int id, AiSummaryS
     response.Headers.CacheControl = "no-cache";
     response.Headers["X-Accel-Buffering"] = "no";
     await service.StreamSummarizeAsync(id, response.Body, token);
-});
+}).RequireRateLimiting("outbound");
 app.MapGet("/api/settings/ai", (AiSettingsStore store) => Results.Ok(store.View()));
-app.MapPost("/api/settings/ai/test", async (AiSummaryService service, CancellationToken token) => { var result = await service.TestAsync(token); return Results.Ok(new { success = result.Success, message = result.Message, model = result.ModelName }); });
-app.MapPut("/api/settings/ai", (AiSettingsUpdate update, AiSettingsStore store) => { store.Update(update); return Results.Ok(store.View()); });
+app.MapPost("/api/settings/ai/test", async (AiSummaryService service, CancellationToken token) => { var result = await service.TestAsync(token); return Results.Ok(new { success = result.Success, message = result.Message }); }).RequireAuthorization("Admin").RequireRateLimiting("outbound");
+app.MapPut("/api/settings/ai", (AiSettingsUpdate update, AiSettingsStore store) => { store.Update(update); return Results.Ok(store.View()); }).RequireAuthorization("Admin");
 app.MapGet("/api/settings/smtp", (SmtpSettingsStore store) => Results.Ok(store.View()));
-app.MapPost("/api/settings/smtp/test", async (SmtpSettingsService service, CancellationToken token) => { var result = await service.TestAsync(token); return Results.Ok(new { success = result.Success, message = result.Message }); });
-app.MapPut("/api/settings/smtp", (SmtpSettingsUpdate update, SmtpSettingsStore store) => { store.Update(update); return Results.Ok(store.View()); });
+app.MapPost("/api/settings/smtp/test", async (SmtpSettingsService service, CancellationToken token) => { var result = await service.TestAsync(token); return Results.Ok(new { success = result.Success, message = result.Message }); }).RequireAuthorization("Admin").RequireRateLimiting("outbound");
+app.MapPut("/api/settings/smtp", (SmtpSettingsUpdate update, SmtpSettingsStore store) => { store.Update(update); return Results.Ok(store.View()); }).RequireAuthorization("Admin");
 app.MapGet("/api/settings/ad", (AdSettingsStore store) => Results.Ok(store.View()));
-app.MapPost("/api/settings/ad/test", async (AdSettingsService service, CancellationToken token) => { var result = await service.TestAsync(token); return Results.Ok(new { success = result.Success, message = result.Message }); });
-app.MapPut("/api/settings/ad", (AdSettingsUpdate update, AdSettingsStore store) => { store.Update(update); return Results.Ok(store.View()); });
+app.MapPost("/api/settings/ad/test", async (AdSettingsService service, CancellationToken token) => { var result = await service.TestAsync(token); return Results.Ok(new { success = result.Success, message = result.Message }); }).RequireAuthorization("Admin").RequireRateLimiting("outbound");
+app.MapPut("/api/settings/ad", (AdSettingsUpdate update, AdSettingsStore store) => { store.Update(update); return Results.Ok(store.View()); }).RequireAuthorization("Admin");
 app.MapGet("/api/settings/servers", async (ServerSettingsService service, CancellationToken token) => Results.Ok(await service.ListAsync(token)));
-app.MapPut("/api/settings/servers/{id:int}", async (int id, ServerSettingsUpdate update, ServerSettingsService service, CancellationToken token) => Results.Ok(new { success = await service.UpdateAsync(id, update, token) }));
+app.MapPut("/api/settings/servers/{id:int}", async (int id, ServerSettingsUpdate update, ServerSettingsService service, CancellationToken token) => Results.Ok(new { success = await service.UpdateAsync(id, update, token) })).RequireAuthorization("Admin");
 app.MapGet("/api/settings/retention", async (RetentionSettingsService service, CancellationToken token) => Results.Ok(await service.GetAsync(token)));
-app.MapPut("/api/settings/retention", async (RetentionSettingsUpdate update, RetentionSettingsService service, CancellationToken token) => Results.Ok(await service.UpdateAsync(update, token)));
+app.MapPut("/api/settings/retention", async (RetentionSettingsUpdate update, RetentionSettingsService service, CancellationToken token) => Results.Ok(await service.UpdateAsync(update, token))).RequireAuthorization("Admin");
 app.MapGet("/api/settings/backup-scope", async (int? serverId, ServerSettingsService service, CancellationToken token) => Results.Ok(await service.ListBackupScopeAsync(serverId, token)));
-app.MapPut("/api/settings/backup-scope/{databaseId:int}", async (int databaseId, BackupScopeUpdate update, ServerSettingsService service, CancellationToken token) => Results.Ok(new { success = await service.UpdateBackupScopeAsync(databaseId, update, token) }));
-app.MapGet("/api/settings/containers", async (ContainerMonitorService service, CancellationToken token) => Results.Ok(await service.ListAsync(token)));
-app.MapGet("/api/settings/containers/{containerId}/logs", async (string containerId, int? tail, ContainerMonitorService service, CancellationToken token) => Results.Ok(new { logs = await service.GetLogsAsync(containerId, tail ?? 200, token) }));
+app.MapPut("/api/settings/backup-scope/{databaseId:int}", async (int databaseId, BackupScopeUpdate update, ServerSettingsService service, CancellationToken token) => Results.Ok(new { success = await service.UpdateBackupScopeAsync(databaseId, update, token) })).RequireAuthorization("Admin");
+app.MapGet("/api/settings/containers", async (ContainerMonitorService service, CancellationToken token) => Results.Ok(await service.ListAsync(token))).RequireAuthorization("Admin");
+app.MapGet("/api/settings/containers/{containerId}/logs", async (string containerId, int? tail, ContainerMonitorService service, CancellationToken token) => Results.Ok(new { logs = await service.LogsAsync(containerId, tail ?? 200, token) })).RequireAuthorization("Admin");
 app.MapGet("/api/databases", async (int? page, int? pageSize, string? search, DashboardStore store, CancellationToken token) => Results.Ok(await store.GetDatabasesAsync(Math.Max(1, page ?? 1), Math.Clamp(pageSize ?? 50, 1, 100), search, token)));
 app.MapGet("/api/databases/{id:int}", async (int id, DashboardStore store, CancellationToken token) => { var value = await store.GetDatabaseDetailAsync(id, token); return value is null ? Results.NotFound() : Results.Ok(value); });
 app.MapGet("/api/databases/{id:int}/capacity-history", async (int id, int? days, DashboardStore store, CancellationToken token) => Results.Ok(await store.GetCapacityHistoryAsync(id, days ?? 30, token)));
 app.MapGet("/api/audit", async (DateTimeOffset? fromUtc, DateTimeOffset? toUtc, string? userName, string? action, string? resourceType, string? result, string? correlationId, int? page, int? pageSize, AuditStore store, CancellationToken token) =>
-    Results.Ok(await store.ListAsync(fromUtc, toUtc, userName, action, resourceType, result, correlationId, Math.Max(1, page ?? 1), Math.Clamp(pageSize ?? 50, 1, 100), token)));
+    Results.Ok(await store.ListAsync(fromUtc, toUtc, userName, action, resourceType, result, correlationId, Math.Max(1, page ?? 1), Math.Clamp(pageSize ?? 50, 1, 100), token))).RequireAuthorization("Admin");
 app.MapGet("/api/performance/overview", async (int? hours, PerformanceStore store, CancellationToken token) => Results.Ok(await store.GetOverviewAsync(PerformanceStore.AllowedHours(hours ?? 24), token)));
 app.MapGet("/api/performance/blocking", async (int? hours, PerformanceStore store, CancellationToken token) => Results.Ok(await store.GetBlockingAsync(PerformanceStore.AllowedHours(hours ?? 24), token)));
 app.MapGet("/api/performance/deadlocks", async (int? hours, PerformanceStore store, CancellationToken token) => Results.Ok(await store.GetDeadlocksAsync(PerformanceStore.AllowedHours(hours ?? 24), token)));
@@ -180,7 +214,7 @@ app.MapPost("/api/live/object-ai-summary", async (ObjectDefinitionRequest reques
 {
     var definition = await store.GetObjectDefinitionAsync(request.ServerId, request.DatabaseName, request.SchemaName, request.ObjectName, request.ObjectType, token);
     return definition is null ? Results.NotFound() : Results.Ok(await service.SummarizeObjectAsync(definition, token));
-});
+}).RequireRateLimiting("outbound");
 app.MapGet("/api/operations/overview", async (int? hours, OperationsStore store, CancellationToken token) => Results.Ok(await store.GetOverviewAsync(OperationsStore.AllowedHours(hours ?? 24), token)));
 app.MapGet("/api/operations/events", async (DateTimeOffset? fromUtc, DateTimeOffset? toUtc, string? status, string? severity, string? eventType, int? serverId, int? databaseId, int? page, int? pageSize, OperationsStore store, CancellationToken token) =>
     Results.Ok(await store.ListAsync(fromUtc, toUtc, status, severity, eventType, serverId, databaseId, Math.Max(1, page ?? 1), Math.Clamp(pageSize ?? 50, 1, 100), token)));

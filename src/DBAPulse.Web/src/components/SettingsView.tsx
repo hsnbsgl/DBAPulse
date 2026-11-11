@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Box, Alert, Button, Checkbox, Chip, FormControlLabel, FormGroup, MenuItem, Paper, Stack, Switch, Tab, Table, TableBody, TableCell, TableHead, TableRow, Tabs, TextField, Typography } from '@mui/material';
 
-const api = import.meta.env.VITE_API_BASE_URL || '/api';
+import { apiBase as api, errorMessage, getJson, sendJson } from '../api/client';
 type AiSettings = { provider: string; model: string; baseUrl: string; protocol: string; isConfigured: boolean };
 type SmtpSettings = { host: string; port: number; security: string; username: string; fromEmail: string; fromName: string; isConfigured: boolean };
 type AdSettings = { domain: string; host: string; port: number; baseDn: string; username: string; useSsl: boolean; enabled: boolean; isConfigured: boolean };
@@ -105,14 +105,16 @@ export default function SettingsView() {
   const [logsLoading, setLogsLoading] = useState(false);
 
   useEffect(() => {
-    Promise.all([fetch(`${api}/settings/ai`).then(r => r.json()), fetch(`${api}/settings/smtp`).then(r => r.json()), fetch(`${api}/settings/ad`).then(r => r.json()), fetch(`${api}/settings/servers`).then(r => r.json()), fetch(`${api}/settings/retention`).then(r => r.json())])
-      .then(([aiSettings, smtpSettings, adSettings, serverSettings, retentionSettings]) => { setAi(aiSettings); setSmtp(smtpSettings); setAd(adSettings); setServers(serverSettings); setRetention(retentionSettings); })
-      .catch(() => setError('Settings could not be loaded.'));
+    let cancelled = false;
+    Promise.all([getJson<AiSettings>('/settings/ai'), getJson<SmtpSettings>('/settings/smtp'), getJson<AdSettings>('/settings/ad'), getJson<ServerSetting[]>('/settings/servers'), getJson<RetentionSettings>('/settings/retention')])
+      .then(([aiSettings, smtpSettings, adSettings, serverSettings, retentionSettings]) => { if (cancelled) return; setAi(aiSettings); setSmtp(smtpSettings); setAd(adSettings); setServers(serverSettings); setRetention(retentionSettings); })
+      .catch(loadError => { if (!cancelled) setError(`Settings could not be loaded: ${errorMessage(loadError, 'unknown error')}`); });
+    return () => { cancelled = true; };
   }, []);
-  const test = async (kind: 'ai' | 'smtp' | 'ad') => { setTesting(true); setSaved(''); setError(''); try { const r = await fetch(`${api}/settings/${kind}/test`, { method: 'POST' }); const result = await r.json(); if (result.success) setSaved(result.message); else setError(result.message); } catch { setError(`${kind.toUpperCase()} connection test failed.`); } finally { setTesting(false); } };
-  const save = async (kind: 'ai' | 'smtp' | 'ad', body: unknown, clear: () => void, message: string) => { setSaved(''); setError(''); const r = await fetch(`${api}/settings/${kind}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); if (!r.ok) { setError(`${kind.toUpperCase()} settings could not be saved.`); return; } const value = await r.json(); if (kind === 'ai') setAi(value); if (kind === 'smtp') setSmtp(value); if (kind === 'ad') setAd(value); clear(); setSaved(message); };
-  const updateServer = async (server: ServerSetting, update: Partial<ServerSetting>) => { setError(''); const r = await fetch(`${api}/settings/servers/${server.serverId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(update) }); if (!r.ok) { setError('Server settings could not be updated.'); return; } setServers(rows => rows.map(row => row.serverId === server.serverId ? { ...row, ...update } : row)); setSaved(`${server.serverName} settings saved.`); };
-  const saveRetention = async () => { setError(''); const response = await fetch(`${api}/settings/retention`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(retention) }); if (!response.ok) { setError('Retention settings could not be saved.'); return; } setRetention(await response.json()); setSaved('General retention cleanup period saved.'); };
+  const test = async (kind: 'ai' | 'smtp' | 'ad') => { setTesting(true); setSaved(''); setError(''); try { const result = await sendJson<{ success: boolean; message: string }>(`/settings/${kind}/test`, 'POST'); if (result?.success) setSaved(result.message); else setError(result?.message || `${kind.toUpperCase()} connection test failed.`); } catch (testError) { setError(`${kind.toUpperCase()} connection test failed: ${errorMessage(testError, 'unknown error')}`); } finally { setTesting(false); } };
+  const save = async (kind: 'ai' | 'smtp' | 'ad', body: unknown, clear: () => void, message: string) => { setSaved(''); setError(''); try { const value = await sendJson<never>(`/settings/${kind}`, 'PUT', body); if (kind === 'ai') setAi(value); if (kind === 'smtp') setSmtp(value); if (kind === 'ad') setAd(value); clear(); setSaved(message); } catch (saveError) { setError(`${kind.toUpperCase()} settings could not be saved: ${errorMessage(saveError, 'unknown error')}`); } };
+  const updateServer = async (server: ServerSetting, update: Partial<ServerSetting>) => { setError(''); try { await sendJson(`/settings/servers/${server.serverId}`, 'PUT', update); } catch (updateError) { setError(`Server settings could not be updated: ${errorMessage(updateError, 'unknown error')}`); return; } setServers(rows => rows.map(row => row.serverId === server.serverId ? { ...row, ...update } : row)); setSaved(`${server.serverName} settings saved.`); };
+  const saveRetention = async () => { setError(''); try { setRetention(await sendJson<RetentionSettings>('/settings/retention', 'PUT', retention)); } catch (retentionError) { setError(`Retention settings could not be saved: ${errorMessage(retentionError, 'unknown error')}`); return; } setSaved('General retention cleanup period saved.'); };
   const selected = (value: string, item: string) => value.split(',').map(x => x.trim()).includes(item);
   const toggleAlertFilter = (server: ServerSetting, field: 'alertEventTypes' | 'alertSeverities', value: string) => {
     const current = server[field].split(',').map(x => x.trim()).filter(Boolean);
@@ -122,11 +124,9 @@ export default function SettingsView() {
   const loadBackupScope = async (serverId: number) => {
     setScopeLoading(current => ({ ...current, [serverId]: true }));
     try {
-      const response = await fetch(`${api}/settings/backup-scope?serverId=${serverId}`);
-      if (!response.ok) throw new Error('Backup scope could not be loaded.');
-      const rows: BackupScopeSetting[] = await response.json();
+      const rows = await getJson<BackupScopeSetting[]>(`/settings/backup-scope?serverId=${serverId}`);
       setBackupScopes(current => ({ ...current, [serverId]: rows }));
-    } catch (scopeError) { setError(scopeError instanceof Error ? scopeError.message : 'Backup scope could not be loaded.'); }
+    } catch (scopeError) { setError(`Backup scope could not be loaded: ${errorMessage(scopeError, 'unknown error')}`); }
     finally { setScopeLoading(current => ({ ...current, [serverId]: false })); }
   };
   const toggleBackupScope = (serverId: number) => {
@@ -136,8 +136,8 @@ export default function SettingsView() {
   };
   const updateBackupScope = async (row: BackupScopeSetting, mode: BackupScopeSetting['backupProtectionMode']) => {
     setError('');
-    const response = await fetch(`${api}/settings/backup-scope/${row.databaseId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode }) });
-    if (!response.ok) { setError(`${row.databaseName} backup scope could not be updated.`); return; }
+    try { await sendJson(`/settings/backup-scope/${row.databaseId}`, 'PUT', { mode }); }
+    catch (scopeError) { setError(`${row.databaseName} backup scope could not be updated: ${errorMessage(scopeError, 'unknown error')}`); return; }
     setBackupScopes(current => ({ ...current, [row.serverId]: (current[row.serverId] || []).map(item => item.databaseId === row.databaseId ? { ...item, backupProtectionMode: mode } : item) }));
     setSaved(`${row.databaseName} backup scope saved.`);
   };
@@ -145,23 +145,19 @@ export default function SettingsView() {
   const loadContainers = async () => {
     setContainersLoading(true); setError('');
     try {
-      const response = await fetch(`${api}/settings/containers`);
-      if (!response.ok) throw new Error(`Container list could not be loaded (${response.status}).`);
-      const rows = await response.json() as ContainerSummary[];
+      const rows = await getJson<ContainerSummary[]>('/settings/containers');
       setContainers(rows);
       setSelectedContainerId(current => rows.some(row => row.id === current) ? current : rows.find(row => row.running)?.id || rows[0]?.id || '');
-    } catch (containerError) { setError(containerError instanceof Error ? containerError.message : 'Container list could not be loaded.'); }
+    } catch (containerError) { setError(`Container list could not be loaded: ${errorMessage(containerError, 'unknown error')}`); }
     finally { setContainersLoading(false); }
   };
   const loadContainerLogs = async (containerId = selectedContainerId) => {
     if (!containerId) return;
     setLogsLoading(true); setError('');
     try {
-      const response = await fetch(`${api}/settings/containers/${encodeURIComponent(containerId)}/logs?tail=300`);
-      if (!response.ok) throw new Error(`Container logs could not be loaded (${response.status}).`);
-      const result = await response.json() as { logs: string };
+      const result = await getJson<{ logs: string }>(`/settings/containers/${encodeURIComponent(containerId)}/logs?tail=300`);
       setContainerLogs(result.logs);
-    } catch (containerError) { setError(containerError instanceof Error ? containerError.message : 'Container logs could not be loaded.'); }
+    } catch (containerError) { setError(`Container logs could not be loaded: ${errorMessage(containerError, 'unknown error')}`); }
     finally { setLogsLoading(false); }
   };
   useEffect(() => { if (tab === 5) void loadContainers(); }, [tab]);

@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
-import { Alert, AppBar, Box, ButtonBase, Chip, CircularProgress, Collapse, Divider, Drawer, FormControl, IconButton, List, ListItemButton, ListItemIcon, ListItemText, MenuItem, Paper, Select, Stack, Tab, Tabs, Toolbar, Tooltip, Typography } from '@mui/material';
+import { Alert, AppBar, Box, Button, ButtonBase, Chip, CircularProgress, Collapse, Divider, Drawer, FormControl, IconButton, List, ListItemButton, ListItemIcon, ListItemText, MenuItem, Paper, Select, Stack, Tab, Tabs, Toolbar, Tooltip, Typography } from '@mui/material';
 import DnsIcon from '@mui/icons-material/Dns';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
@@ -17,6 +17,8 @@ import CodeIcon from '@mui/icons-material/Code';
 import ViewModuleIcon from '@mui/icons-material/ViewModule';
 import FunctionsIcon from '@mui/icons-material/Functions';
 import CloseIcon from '@mui/icons-material/Close';
+import LogoutIcon from '@mui/icons-material/Logout';
+import { getJson, sendJson } from '../../api/client';
 import sqlServerLogo from '../../assets/sql-server-logo.svg';
 
 type NavItem = { key: string; label: string; icon: ReactNode; target?: string };
@@ -97,7 +99,6 @@ function ServerSelector({ servers, value, onChange }: { servers: SidebarServer[]
 }
 
 function ObjectExplorer({ servers, onServerSelect, onObjectSelect }: { servers: SidebarServer[]; onServerSelect?: (serverId: number) => void; onObjectSelect: (object: SelectedObject) => void }) {
-  const base = import.meta.env.VITE_API_BASE_URL || '/api';
   const [expandedServers, setExpandedServers] = useState<Set<number>>(new Set());
   const [expandedDatabases, setExpandedDatabases] = useState<Set<string>>(new Set());
   const [databases, setDatabases] = useState<Record<number, SidebarDatabase[]>>({});
@@ -110,9 +111,7 @@ function ObjectExplorer({ servers, onServerSelect, onObjectSelect }: { servers: 
     if (databases[serverId] || loadingServers.has(serverId)) return;
     setLoadingServers(current => new Set(current).add(serverId));
     try {
-      const response = await fetch(`${base}/servers/${serverId}`);
-      if (!response.ok) throw new Error(`API request failed (${response.status})`);
-      const detail = await response.json() as { databases: SidebarDatabase[] };
+      const detail = await getJson<{ databases: SidebarDatabase[] }>(`/servers/${serverId}`);
       setDatabases(current => ({ ...current, [serverId]: detail.databases }));
     } catch (error) {
       setErrors(current => ({ ...current, [`server:${serverId}`]: error instanceof Error ? error.message : String(error) }));
@@ -132,9 +131,7 @@ function ObjectExplorer({ servers, onServerSelect, onObjectSelect }: { servers: 
     setLoadingDatabases(current => new Set(current).add(key));
     try {
       const query = new URLSearchParams({ serverId: String(serverId), databaseId: String(database.databaseId) });
-      const response = await fetch(`${base}/live/object-explorer?${query}`);
-      if (!response.ok) throw new Error(`API request failed (${response.status})`);
-      const snapshot = await response.json() as ObjectExplorerSnapshot;
+      const snapshot = await getJson<ObjectExplorerSnapshot>(`/live/object-explorer?${query}`);
       setObjects(current => ({ ...current, [key]: snapshot }));
     } catch (error) {
       setErrors(current => ({ ...current, [key]: error instanceof Error ? error.message : String(error) }));
@@ -160,7 +157,11 @@ function ObjectExplorer({ servers, onServerSelect, onObjectSelect }: { servers: 
   })}</List>;
 }
 
-export default function AppShell({ activeView, onNavigate, onServerSelect, themeMode, onToggleTheme, children }: { activeView: string; onNavigate: (view: string) => void; onServerSelect?: (serverId: number) => void; themeMode: 'dark' | 'light'; onToggleTheme: () => void; children: ReactNode }) {
+// Object AI summaries are cached for the browser session so reopening the tab does not re-run the LLM.
+const objectAiCache = new Map<string, string>();
+const objectAiCacheKey = (object: SelectedObject) => JSON.stringify([object.serverId, object.databaseName, object.schemaName, object.objectName, object.objectType]);
+
+export default function AppShell({ activeView, onNavigate, onServerSelect, themeMode, onToggleTheme, userName, onLogout, children }: { activeView: string; onNavigate: (view: string) => void; onServerSelect?: (serverId: number) => void; themeMode: 'dark' | 'light'; onToggleTheme: () => void; userName?: string; onLogout?: () => void; children: ReactNode }) {
   const active = ['server', 'database'].includes(activeView) ? 'estate' : activeView;
   const [servers, setServers] = useState<SidebarServer[]>([]);
   const [serversOpen, setServersOpen] = useState(active === 'estate');
@@ -173,12 +174,9 @@ export default function AppShell({ activeView, onNavigate, onServerSelect, theme
   const [objectAi, setObjectAi] = useState<string>();
   const [objectAiLoading, setObjectAiLoading] = useState(false);
   const [objectAiError, setObjectAiError] = useState('');
+  const [objectAiGeneration, setObjectAiGeneration] = useState(0);
   useEffect(() => {
-    const base = import.meta.env.VITE_API_BASE_URL || '/api';
-    Promise.all([fetch(`${base}/servers`), fetch(`${base}/management/health`)]).then(async ([serverResponse, healthResponse]) => {
-      if (!serverResponse.ok) throw new Error('Unable to load servers');
-      const serverRows = await serverResponse.json() as Array<Omit<SidebarServer, 'healthStatus'>>;
-      const healthRows = healthResponse.ok ? await healthResponse.json() as SidebarHealth[] : [];
+    Promise.all([getJson<Array<Omit<SidebarServer, 'healthStatus'>>>('/servers'), getJson<SidebarHealth[]>('/management/health').catch(() => [] as SidebarHealth[])]).then(([serverRows, healthRows]) => {
       const healthByServer = new Map(healthRows.filter(row => row.entityType === 'Server').map(row => [row.serverId, row.overallStatus]));
       setServers(serverRows.map(server => ({ ...server, healthStatus: healthByServer.get(server.serverId) || 'Unknown' })));
     }).catch(() => setServers([]));
@@ -189,16 +187,20 @@ export default function AppShell({ activeView, onNavigate, onServerSelect, theme
     const controller = new AbortController();
     const query = new URLSearchParams({ serverId: String(selectedObject.serverId), databaseName: selectedObject.databaseName, schemaName: selectedObject.schemaName, objectName: selectedObject.objectName, objectType: selectedObject.objectType });
     setDefinitionLoading(true); setDefinitionError('');
-    fetch(`${import.meta.env.VITE_API_BASE_URL || '/api'}/live/object-definition?${query}`, { signal: controller.signal }).then(async response => { if (!response.ok) throw new Error(`API request failed (${response.status})`); return response.json() as Promise<ObjectDefinition>; }).then(setDefinition).catch(error => { if (error.name !== 'AbortError') { setDefinition(undefined); setDefinitionError(error instanceof Error ? error.message : String(error)); } }).finally(() => { if (!controller.signal.aborted) setDefinitionLoading(false); });
+    getJson<ObjectDefinition>(`/live/object-definition?${query}`, { signal: controller.signal }).then(setDefinition).catch(error => { if (error.name !== 'AbortError') { setDefinition(undefined); setDefinitionError(error instanceof Error ? error.message : String(error)); } }).finally(() => { if (!controller.signal.aborted) setDefinitionLoading(false); });
     return () => controller.abort();
   }, [selectedObject]);
   useEffect(() => {
     if (!selectedObject || objectTab !== 'ai') return;
+    const cacheKey = objectAiCacheKey(selectedObject);
+    const cached = objectAiCache.get(cacheKey);
+    if (cached != null) { setObjectAi(cached); setObjectAiError(''); setObjectAiLoading(false); return; }
     const controller = new AbortController();
     setObjectAiLoading(true); setObjectAiError(''); setObjectAi(undefined);
-    fetch(`${import.meta.env.VITE_API_BASE_URL || '/api'}/live/object-ai-summary`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(selectedObject), signal: controller.signal }).then(async response => { if (!response.ok) throw new Error(`API request failed (${response.status})`); return response.json() as Promise<{ summary?: string; error?: string }>; }).then(value => { if (value.error) setObjectAiError(value.error); else setObjectAi(value.summary || 'AI response did not contain text.'); }).catch(error => { if (error.name !== 'AbortError') setObjectAiError(error instanceof Error ? error.message : String(error)); }).finally(() => { if (!controller.signal.aborted) setObjectAiLoading(false); });
+    sendJson<{ summary?: string; error?: string }>('/live/object-ai-summary', 'POST', selectedObject, { signal: controller.signal }).then(value => { if (controller.signal.aborted) return; if (value?.error) setObjectAiError(value.error); else { const summary = value?.summary || 'AI response did not contain text.'; if (value?.summary) objectAiCache.set(cacheKey, summary); setObjectAi(summary); } }).catch(error => { if (error.name !== 'AbortError') setObjectAiError(error instanceof Error ? error.message : String(error)); }).finally(() => { if (!controller.signal.aborted) setObjectAiLoading(false); });
     return () => controller.abort();
-  }, [selectedObject, objectTab]);
+  }, [selectedObject, objectTab, objectAiGeneration]);
+  const regenerateObjectAi = () => { if (selectedObject) objectAiCache.delete(objectAiCacheKey(selectedObject)); setObjectAiGeneration(value => value + 1); };
   const showServerSelector = !['dashboard', 'estate', 'server', 'database', 'settings'].includes(activeView);
   return <ServerFilterContext.Provider value={{ selectedServerId, setSelectedServerId, servers }}><Box className="app-shell">
     <AppBar position="fixed" className="topbar"><Toolbar>
@@ -207,11 +209,11 @@ export default function AppShell({ activeView, onNavigate, onServerSelect, theme
       <Box sx={{ flex: 1 }} />
       {showServerSelector && <><Typography className="server-selector-label">Server</Typography><ServerSelector servers={servers} value={selectedServerId} onChange={setSelectedServerId} /></>}
       <Chip size="small" label="Europe/Istanbul" variant="outlined" />
-      <Tooltip title={themeMode === 'dark' ? 'Açık temaya geç' : 'Koyu temaya geç'}><IconButton className="theme-toggle" size="small" onClick={onToggleTheme} aria-label={themeMode === 'dark' ? 'Açık temaya geç' : 'Koyu temaya geç'}>{themeMode === 'dark' ? <LightModeIcon fontSize="small" /> : <DarkModeIcon fontSize="small" />}</IconButton></Tooltip><Typography className="identity-label">anonymous</Typography>
+      <Tooltip title={themeMode === 'dark' ? 'Açık temaya geç' : 'Koyu temaya geç'}><IconButton className="theme-toggle" size="small" onClick={onToggleTheme} aria-label={themeMode === 'dark' ? 'Açık temaya geç' : 'Koyu temaya geç'}>{themeMode === 'dark' ? <LightModeIcon fontSize="small" /> : <DarkModeIcon fontSize="small" />}</IconButton></Tooltip><Typography className="identity-label">{userName || 'Signed in'}</Typography>{onLogout && <Tooltip title="Sign out"><Button size="small" color="inherit" startIcon={<LogoutIcon fontSize="small" />} onClick={onLogout} sx={{ ml: 1 }}>Sign out</Button></Tooltip>}
     </Toolbar></AppBar>
     <Drawer variant="permanent" className="drawer"><ButtonBase className="drawer-brand" onClick={() => onNavigate('dashboard')} aria-label="SQL Server ana ekrana dön"><SqlServerLogo /></ButtonBase>
       <List className="nav-list">{nav.map(item => item.key === 'estate' ? <Box key={item.key} className="estate-nav-group"><ListItemButton className="estate-nav-item" selected={active === item.key || active === 'dashboard'} onClick={() => { onNavigate(item.target || item.key); setServersOpen(open => !open); }}><ListItemIcon>{item.icon}</ListItemIcon><ListItemText primary={item.label} /><Box className="nav-expand-icon">{serversOpen ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}</Box></ListItemButton><Collapse in={serversOpen} timeout="auto" unmountOnExit><ObjectExplorer servers={servers} onServerSelect={serverId => { setSelectedServerId(serverId); onServerSelect?.(serverId); }} onObjectSelect={object => { setSelectedObject(object); setObjectTab('definition'); }} /></Collapse></Box> : <ListItemButton key={item.key} selected={active === item.key} onClick={() => onNavigate(item.target || item.key)}><ListItemIcon>{item.icon}</ListItemIcon><ListItemText primary={item.label} /></ListItemButton>)}</List>
     </Drawer>
-      <Box component="main" className="main"><Box className="content">{selectedObject && <Paper className="panel object-detail-panel" sx={{ mb: 2 }}><Stack direction="row" justifyContent="space-between" alignItems="center"><Box><Typography variant="h6">{selectedObject.schemaName}.{selectedObject.objectName}</Typography><Typography variant="caption" color="text.secondary">{selectedObject.databaseName} · {selectedObject.objectType}</Typography></Box><IconButton size="small" onClick={() => { setSelectedObject(undefined); setDefinition(undefined); }} aria-label="Close object definition"><CloseIcon fontSize="small" /></IconButton></Stack><Tabs value={objectTab} onChange={(_, value) => setObjectTab(value)} sx={{ mt: 1 }}><Tab value="definition" label="Definition" /><Tab value="ai" label="AI Summary" /></Tabs><Divider sx={{ my: 1.5 }} />{objectTab === 'definition' && (definitionLoading ? <CircularProgress size={22} /> : definitionError ? <Alert severity="error">{definitionError}</Alert> : definition && <Box component="pre" className="sql-definition" sx={{ m: 0, p: 2, maxHeight: '62vh', overflow: 'auto', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace', fontSize: 12, lineHeight: 1.55, borderRadius: 1, bgcolor: 'action.hover' }}><SqlDefinition text={definition.definition} /></Box>)}{objectTab === 'ai' && (objectAiLoading ? <Stack direction="row" spacing={1} alignItems="center"><CircularProgress size={22} /><Typography color="text.secondary">Object performance analysis is being generated…</Typography></Stack> : objectAiError ? <Alert severity="info">{objectAiError} <a href="?view=settings">Open Settings</a></Alert> : <Box className="ai-summary-content" sx={{ whiteSpace: 'pre-wrap' }}>{objectAi || 'Generating summary…'}</Box>)}</Paper>}{!selectedObject && children}</Box></Box>
+      <Box component="main" className="main"><Box className="content">{selectedObject && <Paper className="panel object-detail-panel" sx={{ mb: 2 }}><Stack direction="row" justifyContent="space-between" alignItems="center"><Box><Typography variant="h6">{selectedObject.schemaName}.{selectedObject.objectName}</Typography><Typography variant="caption" color="text.secondary">{selectedObject.databaseName} · {selectedObject.objectType}</Typography></Box><IconButton size="small" onClick={() => { setSelectedObject(undefined); setDefinition(undefined); }} aria-label="Close object definition"><CloseIcon fontSize="small" /></IconButton></Stack><Tabs value={objectTab} onChange={(_, value) => setObjectTab(value)} sx={{ mt: 1 }}><Tab value="definition" label="Definition" /><Tab value="ai" label="AI Summary" /></Tabs><Divider sx={{ my: 1.5 }} />{objectTab === 'definition' && (definitionLoading ? <CircularProgress size={22} /> : definitionError ? <Alert severity="error">{definitionError}</Alert> : definition && <Box component="pre" className="sql-definition" sx={{ m: 0, p: 2, maxHeight: '62vh', overflow: 'auto', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace', fontSize: 12, lineHeight: 1.55, borderRadius: 1, bgcolor: 'action.hover' }}><SqlDefinition text={definition.definition} /></Box>)}{objectTab === 'ai' && (objectAiLoading ? <Stack direction="row" spacing={1} alignItems="center"><CircularProgress size={22} /><Typography color="text.secondary">Object performance analysis is being generated…</Typography></Stack> : objectAiError ? <Alert severity="info">{objectAiError} <a href="?view=settings">Open Settings</a></Alert> : <Stack spacing={1} alignItems="flex-start"><Button size="small" variant="outlined" onClick={regenerateObjectAi}>Regenerate</Button><Box className="ai-summary-content" sx={{ whiteSpace: 'pre-wrap' }}>{objectAi || 'Generating summary…'}</Box></Stack>)}</Paper>}{!selectedObject && children}</Box></Box>
   </Box></ServerFilterContext.Provider>;
 }

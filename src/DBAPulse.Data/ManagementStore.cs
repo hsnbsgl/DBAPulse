@@ -60,7 +60,7 @@ public sealed class ManagementStore
     public async Task RunRetentionCleanupAsync(CancellationToken token)
     {
         await using var connection = await OpenAsync(token);
-        await using var command = new SqlCommand("dbo.usp_Retention_Cleanup", connection) { CommandType = CommandType.StoredProcedure, CommandTimeout = 300 };
+        await using var command = new SqlCommand("dbo.usp_Retention_Cleanup", connection) { CommandType = CommandType.StoredProcedure, CommandTimeout = 3600 };
         await command.ExecuteNonQueryAsync(token);
     }
     public async Task<HashSet<int>> GetAnomalyTrackingServerIdsAsync(CancellationToken token)
